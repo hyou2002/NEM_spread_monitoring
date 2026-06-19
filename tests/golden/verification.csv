@@ -1,0 +1,17 @@
+week_start,region,method,battery,charge,discharge,spread
+2026-06-08,NSW,best_case,2H,46,112,66
+2026-06-08,NSW,best_case,4H,50,106,56
+2026-06-08,QLD,best_case,2H,38,104,66
+2026-06-08,QLD,best_case,4H,41,99,59
+2026-06-08,VIC,best_case,2H,,85,86
+2026-06-08,VIC,best_case,4H,3,78,75
+2026-06-08,SA,best_case,2H,5,91,96
+2026-06-08,SA,best_case,4H,0,82,82
+2026-06-08,NSW,fixed_time,2H,56,96,39
+2026-06-08,NSW,fixed_time,4H,58,92,34
+2026-06-08,QLD,fixed_time,2H,45,97,52
+2026-06-08,QLD,fixed_time,4H,46,91,46
+2026-06-08,VIC,fixed_time,2H,48,67,19
+2026-06-08,VIC,fixed_time,4H,46,63,16
+2026-06-08,SA,fixed_time,2H,24,64,41
+2026-06-08,SA,fixed_time,4H,25,62,37

@@ -1,0 +1,16 @@
+# Secrets — never commit (spec section 8.6)
+.env
+.streamlit/secrets.toml
+
+# Downloaded AEMO data cache (re-fetched automatically)
+data/raw/*.csv
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local outputs
+*.xlsx
+out_*.xlsx
