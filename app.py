@@ -34,13 +34,13 @@ def _most_recent_monday(today: date) -> date:
 
 
 @st.cache_data(show_spinner=False)
-def _cached_report(run_date: date, auto_download: bool) -> dict:
-    """Cache the deterministic pipeline by (run_date, auto_download).
+def _cached_frames(run_date: date, auto_download: bool) -> dict:
+    """Cache ONLY the slow network load (raw region frames), not the report.
 
-    Only used when there are no manual uploads (uploaded DataFrames are not
-    cache-key friendly). Speeds up re-runs and keeps us inside Cloud limits.
-    """
-    return report.build_report(run_date, auto_download=auto_download)
+    The deterministic tables are recomputed from these frames on every run, so a
+    code change always takes effect — caching the whole report dict can otherwise
+    return a stale structure after a redeploy (KeyError on new keys)."""
+    return report.build_region_frames(run_date, auto_download=auto_download)
 
 
 def _oe_key() -> str | None:
@@ -116,7 +116,8 @@ with st.spinner("AEMO 데이터를 받아 계산 중…"):
                 run_date, auto_download=auto_download, uploaded=uploaded
             )
         else:
-            rep = _cached_report(run_date, auto_download)
+            frames = _cached_frames(run_date, auto_download)
+            rep = report.build_report(run_date, frames=frames)
     except Exception as exc:  # surface a readable message to a non-technical user
         st.error(f"실행 실패: {exc}")
         st.stop()

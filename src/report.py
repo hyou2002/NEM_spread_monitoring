@@ -233,12 +233,19 @@ def build_report(
     auto_download: bool = True,
     uploaded: dict[str, pd.DataFrame] | None = None,
     raw_dir: Path = RAW_DIR,
+    frames: dict[str, pd.DataFrame] | None = None,
 ) -> dict:
-    """Run the full deterministic pipeline; return tables + metadata."""
+    """Run the full deterministic pipeline; return tables + metadata.
+
+    ``frames`` may be supplied pre-loaded (e.g. from a cached loader) to skip the
+    download/parse step; otherwise they are loaded here. Computing the tables is
+    always done fresh so code changes take effect without cache invalidation.
+    """
     start, end = dates.analysis_window(run_date)
-    frames = build_region_frames(
-        run_date, raw_dir=raw_dir, auto_download=auto_download, uploaded=uploaded
-    )
+    if frames is None:
+        frames = build_region_frames(
+            run_date, raw_dir=raw_dir, auto_download=auto_download, uploaded=uploaded
+        )
     if not frames:
         raise RuntimeError(
             "No AEMO data available for any region. Auto-download failed and no "
