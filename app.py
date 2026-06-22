@@ -11,6 +11,7 @@ Homepage layout (Phase 2):
 
 from __future__ import annotations
 
+import html as _html
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -95,43 +96,72 @@ def _temp_figure(temp: "pd.DataFrame", run_date: date):
     return fig
 
 
-def _merged_table(df: "pd.DataFrame", group_col: str = "지역") -> str:
-    """Static HTML table with the group_col cells merged (rowspan). Rows must be
-    already grouped/ordered by group_col."""
+_TBL_CSS = (
+    "<style>"
+    "table.nemtbl{border-collapse:collapse;width:100%;font-size:0.9rem;margin:0 0 .4rem;}"
+    "table.nemtbl th,table.nemtbl td{border:1px solid #d6d9de;padding:6px 10px;"
+    "text-align:center;}"
+    "table.nemtbl th{background:#f2f4f7;font-weight:600;}"
+    "table.nemtbl td.grp{font-weight:600;background:#fafbfc;vertical-align:middle;}"
+    "table.nemtbl td.txt{text-align:left;}"
+    "table.nemtbl a{color:#2563eb;text-decoration:none;}"
+    "</style>"
+)
+
+
+def _cell(col: str, val, link_col: str | None) -> str:
+    if col == link_col and isinstance(val, str) and val.startswith("http"):
+        href = _html.escape(val, quote=True)
+        return f'<td><a href="{href}" target="_blank">열기</a></td>'
+    s = "" if val is None or (isinstance(val, float) and pd.isna(val)) else str(val)
+    cls = ' class="txt"' if len(s) > 16 else ""
+    return f"<td{cls}>{_html.escape(s)}</td>"
+
+
+def _html_table(df: "pd.DataFrame", *, merge_col: str | None = None,
+                link_col: str | None = None) -> str:
+    """Static HTML table. ``merge_col`` merges repeated cells (rowspan; rows must
+    be pre-grouped). ``link_col`` renders that column as a clickable link. All
+    text is HTML-escaped."""
     cols = list(df.columns)
-    others = [c for c in cols if c != group_col]
     rows = df.to_dict("records")
-    out = [
-        "<style>"
-        "table.nemtbl{border-collapse:collapse;width:100%;font-size:0.9rem;}"
-        "table.nemtbl th,table.nemtbl td{border:1px solid #d6d9de;padding:6px 10px;"
-        "text-align:center;}"
-        "table.nemtbl th{background:#f2f4f7;font-weight:600;}"
-        "table.nemtbl td.grp{font-weight:600;background:#fafbfc;vertical-align:middle;}"
-        "table.nemtbl td.txt{text-align:left;}"
-        "</style>",
-        '<table class="nemtbl"><thead><tr>',
-        *[f"<th>{c}</th>" for c in cols],
-        "</tr></thead><tbody>",
-    ]
-    j, n = 0, len(rows)
-    while j < n:
-        g = rows[j][group_col]
-        k = j
-        while k < n and rows[k][group_col] == g:
-            k += 1
-        for ri in range(j, k):
-            out.append("<tr>")
-            if ri == j:
-                out.append(f'<td class="grp" rowspan="{k - j}">{g}</td>')
-            for c in others:
-                val = rows[ri][c]
-                cls = ' class="txt"' if isinstance(val, str) and len(val) > 12 else ""
-                out.append(f"<td{cls}>{val}</td>")
-            out.append("</tr>")
-        j = k
-    out.append("</tbody></table>")
-    return "".join(out)
+    parts = [_TBL_CSS, '<table class="nemtbl"><thead><tr>',
+             *[f"<th>{_html.escape(str(c))}</th>" for c in cols],
+             "</tr></thead><tbody>"]
+    if merge_col:
+        others = [c for c in cols if c != merge_col]
+        j, n = 0, len(rows)
+        while j < n:
+            g = rows[j][merge_col]
+            k = j
+            while k < n and rows[k][merge_col] == g:
+                k += 1
+            for ri in range(j, k):
+                parts.append("<tr>")
+                if ri == j:
+                    parts.append(f'<td class="grp" rowspan="{k - j}">'
+                                 f"{_html.escape(str(g))}</td>")
+                parts += [_cell(c, rows[ri][c], link_col) for c in others]
+                parts.append("</tr>")
+            j = k
+    else:
+        for rec in rows:
+            parts.append("<tr>")
+            parts += [_cell(c, rec[c], link_col) for c in cols]
+            parts.append("</tr>")
+    parts.append("</tbody></table>")
+    return "".join(parts)
+
+
+def _static(df: "pd.DataFrame") -> None:
+    """Render a plain static table (no index)."""
+    st.markdown(_html_table(df), unsafe_allow_html=True)
+
+
+def _static_indexed(df: "pd.DataFrame", index_name: str) -> None:
+    """Render a static table showing the index as the first column."""
+    st.markdown(_html_table(df.reset_index().rename(columns={"index": index_name})),
+                unsafe_allow_html=True)
 
 
 with st.sidebar:
@@ -194,62 +224,59 @@ res = rep["resolution"]
 if not res["is_5min"].all():
     st.error("⚠️ 일부 지역이 5분 해상도가 아닙니다. 숫자를 신뢰하기 전에 확인하세요 (spec 2-1).")
 with st.expander("해상도 검증 결과 (5분/288구간 확인)"):
-    st.dataframe(res, width="stretch")
+    _static(res)
 
 # =========================================================================== #
-# 주간 Spread 업데이트 — 지난주 대비 증감 + 실제 값 매트릭스
+# 1. 주간 Spread 업데이트
 # =========================================================================== #
-st.header("주간 Spread 업데이트")
+st.header("1. 주간 Spread 업데이트")
 
-st.subheader("지난주 대비 증감")
+st.markdown("##### 지난주 대비 증감")
 st.caption("설명은 숫자 변화를 그대로 풀어쓴 것이며, 원인 해석은 포함하지 않습니다 (사람이 직접 작성).")
 change = rep.get("best_case_change")
 if change is None:
     st.info("지난주 데이터가 충분하지 않아 주간 비교를 건너뛰었습니다 (직전 7일 데이터가 불완전).")
 else:
     chg = report.format_change_table(change)[["지역", "용량", "설명 (지난주 대비)"]]
-    st.markdown(_merged_table(chg), unsafe_allow_html=True)
+    st.markdown(_html_table(chg, merge_col="지역"), unsafe_allow_html=True)
 
-st.subheader("이번 주 Spread")
+st.markdown("##### 이번 주 Spread")
 st.caption("[2H/4H × 충전/방전/Spread] × 지역 (AUD/MWh)")
 col_bc, col_fx = st.columns(2)
 with col_bc:
     st.markdown("**Best Case**")
-    st.dataframe(rep["best_case_matrix"], width="stretch")
+    _static_indexed(rep["best_case_matrix"], "구분")
 with col_fx:
     st.markdown("**고정시간**")
-    st.dataframe(rep["fixed_time_matrix"], width="stretch")
+    _static_indexed(rep["fixed_time_matrix"], "구분")
 
-# =========================================================================== #
-# 2025년 Spread — 연평균 + 분석월 (대시보드 이미지 양식)
-# =========================================================================== #
-st.header("2025년 Spread")
+st.markdown("##### 2025년 Spread")
 st.caption("Spread, AUD/MWh — 2025년 연평균과 분석월 기준 참조값.")
 bc25 = report.reference_2025_tables(rep["month_num"], "best_case")
 fx25 = report.reference_2025_tables(rep["month_num"], "fixed_time")
 col_a, col_b = st.columns(2)
 with col_a:
     st.markdown("**Best Case**")
-    st.markdown("연 평균")
-    st.dataframe(bc25["annual"], width="stretch")
-    st.markdown(f"{bc25['month_label']} 평균")
-    st.dataframe(bc25["month"], width="stretch")
+    st.caption("연 평균")
+    _static_indexed(bc25["annual"], "구분")
+    st.caption(f"{bc25['month_label']} 평균")
+    _static_indexed(bc25["month"], "구분")
 with col_b:
     st.markdown("**고정시간**")
-    st.markdown("연 평균")
-    st.dataframe(fx25["annual"], width="stretch")
-    st.markdown(f"{fx25['month_label']} 평균")
-    st.dataframe(fx25["month"], width="stretch")
+    st.caption("연 평균")
+    _static_indexed(fx25["annual"], "구분")
+    st.caption(f"{fx25['month_label']} 평균")
+    _static_indexed(fx25["month"], "구분")
 
 # =========================================================================== #
-# 전력 수요
+# 2. 전력 수요
 # =========================================================================== #
-st.header("전력 수요")
+st.header("2. 전력 수요")
 st.caption("지난주·이번 주 시간대별 평균 수요(MW/5분) 비교. 24h(전체) / daytime(10–16) / peak(16–21)")
 _dem = rep["demand_compare"].copy()
 for _c in ("지난주", "이번 주"):
     _dem[_c] = _dem[_c].map(lambda v: "-" if pd.isna(v) else f"{v:,.0f}")
-st.markdown(_merged_table(_dem), unsafe_allow_html=True)
+st.markdown(_html_table(_dem, merge_col="지역"), unsafe_allow_html=True)
 
 st.download_button(
     "📥 Excel 다운로드 (결정론 코어 표)", data=report.to_excel_bytes(rep),
@@ -263,14 +290,14 @@ st.caption("아래는 외부 데이터(외부 API/스크래핑)입니다. 실패
 # =========================================================================== #
 # OpenNEM 발전량 및 기온 — ISOLATED
 # =========================================================================== #
-st.header("OpenNEM 발전량 및 기온")
+st.header("3. OpenNEM 발전량 및 기온")
 try:
     gen = generation.build_tracker(_cached_gen_raw(run_date, _oe_key()), run_date)
     regions_avail = gen["regions"]
 
-    st.markdown("**발전원별 일별 발전량 (GWh/day)**")
-    st.caption("Open Electricity 웹사이트와 유사한 형태. 0선 위 = 발전원별 발전량 + 수입량, "
-               "0선 아래 = 배터리 및 양수 충전량 + 수출량. 점선 = 지난주/이번 주 경계.")
+    st.markdown("##### 발전원별 일별 발전량 (GWh/day)")
+    st.caption("Open Electricity 웹사이트와 최대한 유사하게 구현해보았습니다.  \n"
+               "0선 위 = 발전원별 발전량 + 수입량, 0선 아래 = 배터리 및 양수 충전량 + 수출량")
     sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
     st.plotly_chart(generation.tracker_figure(gen["daily"], sel, run_date),
                     use_container_width=True)
@@ -280,9 +307,9 @@ try:
     _wk = gen["weekly"].copy()
     for _c in ("지난주", "이번 주", "증감"):
         _wk[_c] = _wk[_c].map(lambda v: "-" if pd.isna(v) else f"{v:,.1f}")
-    st.markdown(_merged_table(_wk), unsafe_allow_html=True)
+    st.markdown(_html_table(_wk, merge_col="지역"), unsafe_allow_html=True)
 
-    st.markdown("**일평균 기온(°C)**")
+    st.markdown("##### 일평균 기온(°C)")
     try:
         temp = _cached_weather(run_date)
         st.plotly_chart(_temp_figure(temp, run_date), use_container_width=True)
@@ -296,20 +323,18 @@ except Exception as exc:  # never let this section break the page
 # =========================================================================== #
 # AEMO 공지 · 관련 아티클 — ISOLATED, no AI summary
 # =========================================================================== #
-st.header("AEMO 공지 · 관련 아티클")
+st.header("4. AEMO 공지 · 관련 아티클")
 st.caption("해당 주, 사람이 직접 검토·작성. 자동 요약 없음 — 원문 링크와 발췌만 제공합니다.")
 
-link_col = st.column_config.LinkColumn("link", display_text="열기")
 try:
     nres = _cached_notices(run_date)
-    st.markdown(f"**AEMO Market Notices** — 주간 {nres['total_in_week']}건 중 "
-                f"최근 {nres['shown']}건 표시")
+    st.markdown("##### AEMO Market Notices")
+    st.caption(f"(주간 {nres['total_in_week']}건 중 최근 {nres['shown']}건 표시)")
     ndf = notices.notices_dataframe(nres)
     if ndf.empty:
         st.write("표시할 공지가 없습니다.")
     else:
-        st.dataframe(ndf, width="stretch", hide_index=True,
-                     column_config={"link": link_col})
+        st.markdown(_html_table(ndf, link_col="link"), unsafe_allow_html=True)
 except notices.NoticesUnavailable as exc:
     st.info(f"AEMO 공지 건너뜀: {exc}")
 except Exception as exc:
@@ -317,13 +342,13 @@ except Exception as exc:
 
 try:
     ares = _cached_articles(run_date)
-    st.markdown("**관련 아티클** (WattClarity · RenewEconomy RSS)")
+    st.markdown("##### 관련 아티클")
+    st.caption("WattClarity · RenewEconomy RSS")
     adf = articles.articles_dataframe(ares)
     if adf.empty:
         st.write("표시할 아티클이 없습니다.")
     else:
-        st.dataframe(adf, width="stretch", hide_index=True,
-                     column_config={"link": link_col})
+        st.markdown(_html_table(adf, link_col="link"), unsafe_allow_html=True)
     if ares.get("errors"):
         st.caption(f"일부 피드 실패: {ares['errors']}")
 except articles.ArticlesUnavailable as exc:
