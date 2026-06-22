@@ -20,6 +20,13 @@
 > 자동 다운로드가 실패하면, 사이드바의 업로드 칸에 AEMO 월별 CSV(`PRICE_AND_DEMAND_*.csv`)를
 > 직접 올린 뒤 다시 **실행** 을 누르면 됩니다.
 
+**화면 구성**
+- **① 이번주 vs 지난주 (Best Case)** — 충전가·방전가·스프레드를 *이번주 값 + 지난주 대비 증감(↑↓)* 으로 표시.
+  설명 문장은 **숫자 변화만 그대로 풀어쓴 것**이며 원인 해석은 넣지 않습니다(사람이 직접 작성).
+- **② 실제 값 매트릭스** — `[2H·4H × 충전/방전/Spread]` × 지역, Best Case와 고정시간 두 표를 나란히.
+- **③ 2025년 비교** — 분석 주가 속한 달의 2025년 스프레드 + 2025 연평균과 비교.
+- **④ 전력수요** — 24h / daytime(10–16) / peak(16–21) 밴드별 평균 MW.
+
 **분석 구간**: 고른 월요일 기준 **직전 월요일 00:05 ~ 이번 월요일 00:00** = 정확히 7일(2016개 5분 구간).
 
 ---
@@ -83,7 +90,8 @@ nem-monitor/
 ├── app.py                 # Streamlit 웹 UI (후임자가 여는 화면)
 ├── run.py                 # CLI 진입점
 ├── requirements.txt       # 버전 고정
-├── config/fixed_windows.csv   # 2025 도출 고정 시간대 (월별 참조값)
+├── config/fixed_windows.csv          # 2025 도출 고정 시간대 (월별 참조값)
+├── config/spread_2025_reference.csv  # 2025 월별·연평균 스프레드 (③ 비교용)
 ├── data/raw/              # 자동 다운로드 캐시 (gitignore)
 ├── src/
 │   ├── dates.py           # 주차/구간 로직 (run_date → 2016구간, 5분 보정)
@@ -98,6 +106,8 @@ nem-monitor/
     ├── test_dates.py · test_spreads.py · test_regression.py
 ```
 
-### Phase 2/3 (예정)
-외부 의존(시장 공고·발전원·기후·아티클)은 코어에서 분리되어, 실패해도 Phase 1(스프레드·수요)은 멈추지 않습니다.
-`src/notices.py`, `generation.py`, `weather.py`, `articles.py` 자리만 비워둔 상태입니다.
+### Phase 2 진행 상황
+- **완료(외부 의존 없음)**: ① 주간 비교, ② 매트릭스, ③ 2025 비교 — 모두 `src/report.py`의 결정론적 함수.
+- **예정(외부 의존, 격리됨)**: ④ 발전원·기온·연계선(`generation.py`, Open Electricity API), ⑤ 공지·아티클(`notices.py`, `articles.py`).
+  외부 의존 모듈은 코어에서 분리되어, 실패해도 ①~③·수요 계산은 멈추지 않습니다.
+  - API 키(`OPENELECTRICITY_API_KEY`)는 **코드/저장소에 넣지 않고** Streamlit **Settings → Secrets**(로컬은 `.env`)에 둡니다.

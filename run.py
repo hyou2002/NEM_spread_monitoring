@@ -43,8 +43,19 @@ def main() -> None:
     if not rep["resolution"]["is_5min"].all():
         print("  ** WARNING: a region is NOT 5-minute resolution — see spec 2-1. **")
 
-    print("\nWeekly spreads (AUD/MWh):")
-    print(rep["spreads"].round(1).to_string(index=False))
+    print("\n(a) Best Case — this week vs last week (AUD/MWh):")
+    if rep["best_case_change"] is None:
+        print("  (prior week incomplete — comparison skipped)")
+    else:
+        print(report.format_change_table(rep["best_case_change"]).to_string(index=False))
+
+    print("\n(b) Best Case matrix (AUD/MWh):")
+    print(rep["best_case_matrix"].to_string())
+    print("\n(b) Fixed Time matrix (AUD/MWh):")
+    print(rep["fixed_time_matrix"].to_string())
+
+    print(f"\n(c) vs 2025 (month {rep['month_num']:02d} / annual avg, spread AUD/MWh):")
+    print(rep["reference_2025"].to_string(index=False))
 
     print("\nDemand by band (avg MW):")
     print(rep["demand"].round(0).to_string(index=False))

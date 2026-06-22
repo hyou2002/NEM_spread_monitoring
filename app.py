@@ -2,6 +2,11 @@
 
 Flow: open link -> pick the Monday -> click "실행 (Run)" -> read tables -> download Excel.
 AEMO data is fetched server-side automatically; a manual upload box is the fallback.
+
+Homepage layout (Phase 2):
+  (a) 이번주 vs 지난주 — Best Case 변화 (값 + 증감 화살표 + 숫자 설명)
+  (b) 실제 값 매트릭스 — [2H/4H x 충전/방전/Spread] x 지역, Best Case / 고정시간 나란히
+  (c) 2025년 비교 — 같은 달 / 연평균 대비
 """
 
 from __future__ import annotations
@@ -26,6 +31,16 @@ st.caption("호주 NEM 주간 배터리 차익거래 스프레드 — NSW / QLD 
 
 def _most_recent_monday(today: date) -> date:
     return today - timedelta(days=today.weekday())
+
+
+@st.cache_data(show_spinner=False)
+def _cached_report(run_date: date, auto_download: bool) -> dict:
+    """Cache the deterministic pipeline by (run_date, auto_download).
+
+    Only used when there are no manual uploads (uploaded DataFrames are not
+    cache-key friendly). Speeds up re-runs and keeps us inside Cloud limits.
+    """
+    return report.build_report(run_date, auto_download=auto_download)
 
 
 with st.sidebar:
@@ -67,9 +82,12 @@ def _parse_uploads(files) -> dict[str, pd.DataFrame]:
 with st.spinner("AEMO 데이터를 받아 계산 중…"):
     try:
         uploaded = _parse_uploads(uploads)
-        rep = report.build_report(
-            run_date, auto_download=auto_download, uploaded=uploaded or None
-        )
+        if uploaded:
+            rep = report.build_report(
+                run_date, auto_download=auto_download, uploaded=uploaded
+            )
+        else:
+            rep = _cached_report(run_date, auto_download)
     except Exception as exc:  # surface a readable message to a non-technical user
         st.error(f"실행 실패: {exc}")
         st.stop()
@@ -86,13 +104,51 @@ if not res["is_5min"].all():
 with st.expander("해상도 검증 결과 (5분/288구간 확인)"):
     st.dataframe(res, width="stretch")
 
-st.subheader("주간 스프레드 (AUD/MWh)")
-st.dataframe(rep["spreads"].round(1), width="stretch")
+# --------------------------------------------------------------------------- #
+# (a) Week-over-week Best Case change
+# --------------------------------------------------------------------------- #
+st.subheader("① 이번주 vs 지난주 — Best Case (AUD/MWh)")
+st.caption("값 = 이번주, 화살표·숫자 = 지난주 대비 증감. 설명은 숫자 변화를 그대로 풀어쓴 것이며, "
+           "원인 해석은 포함하지 않습니다 (사람이 직접 작성).")
+change = rep.get("best_case_change")
+if change is None:
+    st.info("지난주 데이터가 충분하지 않아 주간 비교를 건너뛰었습니다 "
+            "(직전 7일 데이터가 불완전).")
+else:
+    st.dataframe(report.format_change_table(change), width="stretch",
+                 hide_index=True)
 
-st.subheader("스프레드 요약 — 지역 × 방식/용량")
-st.dataframe(report.spreads_pivot(rep["spreads"]), width="stretch")
+# --------------------------------------------------------------------------- #
+# (b) Metric matrices — Best Case / Fixed Time side by side
+# --------------------------------------------------------------------------- #
+st.subheader("② 실제 값 — 매트릭스 (AUD/MWh)")
+col_bc, col_fx = st.columns(2)
+with col_bc:
+    st.markdown("**Best Case (시간대 자유)**")
+    st.dataframe(rep["best_case_matrix"], width="stretch")
+with col_fx:
+    st.markdown("**고정시간 (Fixed Time)**")
+    st.dataframe(rep["fixed_time_matrix"], width="stretch")
 
-st.subheader("전력수요 (밴드별 평균 MW: 24h / daytime 10–16 / peak 16–21)")
+# --------------------------------------------------------------------------- #
+# (c) 2025 reference comparison
+# --------------------------------------------------------------------------- #
+st.subheader(f"③ 2025년 비교 — 분석월({rep['month_num']:02d}월) 및 연평균 대비 (Spread, AUD/MWh)")
+ref = rep["reference_2025"]
+col_bc2, col_fx2 = st.columns(2)
+with col_bc2:
+    st.markdown("**Best Case**")
+    st.dataframe(ref[ref["방식"] == "best_case"].drop(columns="방식"),
+                 width="stretch", hide_index=True)
+with col_fx2:
+    st.markdown("**고정시간 (Fixed Time)**")
+    st.dataframe(ref[ref["방식"] == "fixed_time"].drop(columns="방식"),
+                 width="stretch", hide_index=True)
+
+# --------------------------------------------------------------------------- #
+# Demand + download
+# --------------------------------------------------------------------------- #
+st.subheader("④ 전력수요 (밴드별 평균 MW: 24h / daytime 10–16 / peak 16–21)")
 st.dataframe(rep["demand"].round(0), width="stretch")
 
 st.download_button(
