@@ -72,6 +72,27 @@ def _cached_articles(run_date: date) -> dict:
     return articles.fetch_articles(run_date)
 
 
+def _temp_figure(temp: "pd.DataFrame", run_date: date):
+    """Plotly daily temperature lines (4 regions) with a last/this-week divider."""
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    for region in ingest.REGIONS:
+        s = temp[temp["region"] == region].sort_values("date")
+        if s.empty:
+            continue
+        fig.add_scatter(x=s["date"], y=s["temp_mean_c"], mode="lines+markers",
+                        name=region)
+    boundary = pd.Timestamp(run_date - timedelta(days=7)) - pd.Timedelta(hours=12)
+    fig.add_vline(x=boundary, line_width=2, line_dash="dash", line_color="#444")
+    fig.add_annotation(x=boundary, yref="paper", y=1.04, showarrow=False,
+                       text="◀ 지난주 | 이번주 ▶", font=dict(size=11, color="#444"))
+    fig.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10),
+                      yaxis_title="°C",
+                      legend=dict(orientation="h", yanchor="bottom", y=-0.3))
+    return fig
+
+
 with st.sidebar:
     st.header("실행 설정")
     default_monday = _most_recent_monday(date.today())
@@ -202,26 +223,22 @@ st.caption("아래는 외부 데이터(외부 API/스크래핑)입니다. 실패
 st.header("OpenNEM 발전량 및 기온")
 try:
     gen = _cached_generation(run_date, _oe_key())
-    supply = gen["generation"]
-    regions_avail = [r for r in ingest.REGIONS if r in set(supply["region"])]
+    regions_avail = gen["regions"]
 
-    st.markdown("**발전원별 일별 발전량 (MWh, 일별 누적 막대) — 재생에너지 중심**")
+    st.markdown("**발전원별 일별 발전량 (GWh/day)** — Open Electricity 트래커 재현. "
+                "0선 위 = 발전(연료원별) + 수입, 0선 아래 = 부하(배터리 충전·펌핑·수출). "
+                "점선 = 지난주/이번주 경계.")
     sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
-    pivot = (supply[supply["region"] == sel]
-             .pivot_table(index="date", columns="group", values="energy_mwh",
-                          aggfunc="sum")
-             .sort_index())
-    # order columns renewable-first for readability
-    order = [g for g in (generation.RENEWABLE + generation.NON_RENEWABLE
-                         + generation.LOAD_GROUPS) if g in pivot.columns]
-    st.bar_chart(pivot[order], stack=True)
+    st.plotly_chart(generation.tracker_figure(gen["daily"], sel, run_date),
+                    use_container_width=True)
 
-    st.markdown("**일평균 기온 (°C)**")
+    st.markdown("**이번주 vs 지난주 요약 (GWh) — solar · wind · gas · 순수입(±)**")
+    st.dataframe(gen["weekly"], width="stretch", hide_index=True)
+
+    st.markdown("**일평균 기온(°C)**")
     try:
         temp = _cached_weather(run_date)
-        tpivot = temp.pivot_table(index="date", columns="region",
-                                  values="temp_mean_c").sort_index()
-        st.line_chart(tpivot)
+        st.plotly_chart(_temp_figure(temp, run_date), use_container_width=True)
     except weather.WeatherUnavailable as exc:
         st.info(f"기온 데이터 건너뜀: {exc}")
 except generation.OEUnavailable as exc:

@@ -1,17 +1,18 @@
-"""Open Electricity generation + derived interconnector net-import (spec Phase 2d).
+"""Open Electricity generation tracker — reproduces the OE "Energy (GWh/day)" chart.
 
 ISOLATED / BEST-EFFORT: every public function raises only ``OEUnavailable`` on
-failure. The caller (app) catches it and shows a notice; the deterministic core
-(spreads/demand and sections a/b/c) must never depend on this module.
+failure. The caller (app) catches it; the deterministic core never depends on this.
 
-Data source: Open Electricity API v4, ``GET /v4/data/network/NEM``.
-  - one call returns daily energy (MWh) for every NEM region x fueltech_group.
-  - the API wants timezone-NAIVE datetimes in network (AEST) time.
-  - the API key is COMMUNITY-tier; we keep calls to a minimum and the app caches
-    results with @st.cache_data.
+Layout (like the Open Electricity tracker):
+  * daily stacked bars, x = last 30 days, y = GWh/day.
+  * ABOVE zero: delivered generation by fueltech (coal/gas/hydro/wind/solar incl
+    rooftop/bioenergy/distillate/battery discharging) + interconnector imports.
+  * BELOW zero (negative): loads — battery charging, pumping, exports.
+  * Interconnector flow isn't a fueltech, so net flow is DERIVED:
+    net_import = demand_energy - (delivered - loads); imports = max(net,0),
+    exports = min(net,0).
 
-Interconnector flow is NOT exposed as a fueltech, so we derive a clearly-labelled
-ESTIMATE: net_import = regional demand_energy - regional local generation.
+The API reports charging/pumping as POSITIVE magnitudes, so loads are negated here.
 """
 
 from __future__ import annotations
@@ -26,13 +27,28 @@ import requests
 DEFAULT_BASE_URL = "https://api.openelectricity.org.au/v4"
 TARGET_REGIONS = ["NSW", "QLD", "VIC", "SA"]  # TAS excluded (spec)
 
-# fueltech_group classification (battery_charging/_discharging are sub-components
-# of the net "battery" group and are dropped to avoid double counting).
-RENEWABLE = ["solar", "wind", "hydro", "bioenergy", "battery"]
-NON_RENEWABLE = ["coal", "gas", "distillate"]
-LOAD_GROUPS = ["pumps"]  # negative (consumption)
-SUPPLY_GROUPS = RENEWABLE + NON_RENEWABLE + LOAD_GROUPS
-DROP_GROUPS = ["battery_charging", "battery_discharging"]
+# Delivered generation (plotted positive). Order = stack order, bottom -> top.
+GENERATION_GROUPS = ["coal", "gas", "distillate", "bioenergy", "hydro", "wind",
+                     "solar", "battery_discharging"]
+# Loads (plotted negative; API gives positive magnitudes so we negate).
+LOAD_GROUPS = ["battery_charging", "pumps"]
+DROP_GROUPS = ["battery"]  # net battery = discharging - charging; avoid double count
+
+# OpenNEM/Open Electricity-style fueltech palette.
+PALETTE = {
+    "coal": "#251000", "gas": "#F48E1B", "distillate": "#E2674E",
+    "bioenergy": "#1C7A3D", "hydro": "#4582B4", "wind": "#417505",
+    "solar": "#F5C913", "battery_discharging": "#00A2FA", "imports": "#7E57C2",
+    "battery_charging": "#9BD3F0", "pumps": "#88B0D8", "exports": "#CDB4E6",
+}
+LABELS = {
+    "coal": "Coal", "gas": "Gas", "distillate": "Distillate",
+    "bioenergy": "Bioenergy", "hydro": "Hydro", "wind": "Wind", "solar": "Solar",
+    "battery_discharging": "Battery (Discharging)", "imports": "Imports",
+    "battery_charging": "Battery (Charging)", "pumps": "Pumps", "exports": "Exports",
+}
+# Legend / stack order: positives bottom->top, then negatives.
+PLOT_ORDER = GENERATION_GROUPS + ["imports", "battery_charging", "pumps", "exports"]
 
 
 class OEUnavailable(RuntimeError):
@@ -43,7 +59,6 @@ class OEUnavailable(RuntimeError):
 # Key handling — src stays framework-agnostic; key is injected or read from env.
 # --------------------------------------------------------------------------- #
 def load_api_key(explicit: str | None = None) -> str | None:
-    """Resolve the API key: explicit arg > env var > local .env (dev only)."""
     if explicit:
         return explicit
     key = os.environ.get("OPENELECTRICITY_API_KEY")
@@ -52,14 +67,12 @@ def load_api_key(explicit: str | None = None) -> str | None:
     env_path = Path(__file__).resolve().parent.parent / ".env"
     if env_path.exists():
         for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("OPENELECTRICITY_API_KEY="):
+            if line.strip().startswith("OPENELECTRICITY_API_KEY="):
                 return line.split("=", 1)[1].strip()
     return None
 
 
 def _region_code(name: str) -> str:
-    """'NSW1' -> 'NSW'."""
     name = name.upper()
     return name[:-1] if name.endswith("1") else name
 
@@ -70,16 +83,10 @@ def _region_code(name: str) -> str:
 def _fetch_network(metrics: list[str], date_start: date, date_end: date,
                    *, api_key: str, base_url: str, secondary_grouping: str | None,
                    path: str = "data"):
-    """One GET /{path}/network/NEM call -> parsed JSON 'data' list.
-
-    ``path`` is 'data' for generation/energy (fueltech-groupable) or 'market' for
-    demand metrics (demand_energy lives on the market endpoint).
-    """
+    """One GET /{path}/network/NEM call -> parsed JSON 'data' list."""
     params = {
-        "metrics": metrics,
-        "interval": "1d",
+        "metrics": metrics, "interval": "1d",
         "primary_grouping": "network_region",
-        # API requires tz-naive network-time datetimes.
         "date_start": datetime.combine(date_start, datetime.min.time()).isoformat(),
         "date_end": datetime.combine(date_end, datetime.min.time()).isoformat(),
     }
@@ -104,34 +111,30 @@ def _fetch_network(metrics: list[str], date_start: date, date_end: date,
 
 
 def _series_to_long(data_entry: dict, value_name: str) -> pd.DataFrame:
-    """Flatten one metric's series list into long [date, region, group, value]."""
     rows = []
     for s in data_entry.get("results", []):
         name = s["name"]                      # 'energy_NSW1|battery' or 'demand_energy_NSW1'
-        left, _, group = name.partition("|")  # left holds metric..._REGION; group=fueltech
-        region = _region_code(left.split("_")[-1])  # last token is the region code
+        left, _, group = name.partition("|")  # left ends with REGION; group=fueltech
+        region = _region_code(left.split("_")[-1])
         for ts, val in s["data"]:
-            rows.append({
-                "date": pd.to_datetime(ts).tz_localize(None).normalize(),
-                "region": region,
-                "group": group or value_name,
-                value_name: val,
-            })
+            rows.append({"date": pd.to_datetime(ts).tz_localize(None).normalize(),
+                         "region": region, "group": group or value_name,
+                         value_name: val})
     return pd.DataFrame(rows)
 
 
 # --------------------------------------------------------------------------- #
-# Public: 30-day daily generation + net import
+# Public: 30-day tracker data
 # --------------------------------------------------------------------------- #
 def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = None,
                      base_url: str = DEFAULT_BASE_URL) -> dict:
-    """Daily generation by fueltech + derived net-import for the last ``days``.
+    """Daily signed generation (GWh) for the OE-style tracker, last ``days``.
 
-    Returns a dict of tidy DataFrames (all restricted to NSW/QLD/VIC/SA):
-        generation : [date, region, group, energy_mwh]   (supply groups only)
-        net_import : [date, region, net_import_mwh]       (= demand - local gen, est.)
-        weekly     : [region, period, renewable_mwh, total_mwh, renewable_pct,
-                      net_import_mwh] for this week vs last week
+    Returns:
+        daily   : tidy [date, region, group, gwh] — generation/imports positive,
+                  loads/exports negative; ready for a relative stacked bar.
+        weekly  : [지역, 항목, 지난주, 이번주, 증감] (GWh) for solar/wind/gas/순수입.
+        regions : list of regions present.
     Raises OEUnavailable on any failure.
     """
     key = load_api_key(api_key)
@@ -142,57 +145,114 @@ def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = No
 
     end = run_date
     start = run_date - timedelta(days=days)
-
     energy = _fetch_network(["energy"], start, end, api_key=key, base_url=base_url,
                             secondary_grouping="fueltech_group")
-    # demand_energy lives on the market endpoint and is reported in GWh, while
-    # generation energy is in MWh — rescale demand to MWh before differencing.
     demand = _fetch_network(["demand_energy"], start, end, api_key=key,
-                            base_url=base_url, secondary_grouping=None,
-                            path="market")
+                            base_url=base_url, secondary_grouping=None, path="market")
 
-    gen = _series_to_long(energy[0], "energy_mwh")
+    gen = _series_to_long(energy[0], "mwh")
     gen = gen[gen["region"].isin(TARGET_REGIONS) & ~gen["group"].isin(DROP_GROUPS)]
-    supply = gen[gen["group"].isin(SUPPLY_GROUPS)].copy()
+    wide = (gen.pivot_table(index=["date", "region"], columns="group",
+                            values="mwh", aggfunc="sum").fillna(0.0))
+    for col in GENERATION_GROUPS + LOAD_GROUPS:
+        if col not in wide.columns:
+            wide[col] = 0.0
 
-    dem = _series_to_long(demand[0], "demand_mwh")
-    dem = dem[dem["region"].isin(TARGET_REGIONS)][["date", "region", "demand_mwh"]]
-    dem["demand_mwh"] = dem["demand_mwh"] * 1000.0  # GWh -> MWh
+    # demand_energy is GWh on the market endpoint -> MWh
+    dem = _series_to_long(demand[0], "mwh")
+    dem = dem[dem["region"].isin(TARGET_REGIONS)]
+    dem = dem.set_index(["date", "region"])["mwh"] * 1000.0
 
-    local = (supply.groupby(["date", "region"], as_index=False)["energy_mwh"].sum()
-             .rename(columns={"energy_mwh": "local_mwh"}))
-    net = local.merge(dem, on=["date", "region"], how="left")
-    net["net_import_mwh"] = net["demand_mwh"] - net["local_mwh"]
-    net_import = net[["date", "region", "net_import_mwh"]]
+    delivered = wide[GENERATION_GROUPS].sum(axis=1)
+    loads = wide[LOAD_GROUPS].sum(axis=1)
+    net_import = dem.reindex(wide.index).fillna(0.0) - (delivered - loads)
 
-    weekly = _weekly_compare(supply, net_import, run_date)
-    return {"generation": supply.reset_index(drop=True),
-            "net_import": net_import.reset_index(drop=True),
-            "weekly": weekly}
+    signed = pd.DataFrame(index=wide.index)
+    for col in GENERATION_GROUPS:
+        signed[col] = wide[col]
+    signed["battery_charging"] = -wide["battery_charging"]
+    signed["pumps"] = -wide["pumps"]
+    signed["imports"] = net_import.clip(lower=0)
+    signed["exports"] = net_import.clip(upper=0)
+    signed = signed / 1000.0  # MWh -> GWh
+
+    daily = (signed.reset_index()
+             .melt(id_vars=["date", "region"], var_name="group", value_name="gwh"))
+    regions = [r for r in TARGET_REGIONS if r in set(daily["region"])]
+    weekly = _weekly_summary(wide, net_import, run_date)
+    return {"daily": daily, "weekly": weekly, "regions": regions}
 
 
-def _weekly_compare(supply: pd.DataFrame, net_import: pd.DataFrame,
+def _weekly_summary(wide: pd.DataFrame, net_import: pd.Series,
                     run_date: date) -> pd.DataFrame:
-    """This 7-day window vs the prior 7-day window: renewable share + net import."""
-    this_start = pd.Timestamp(run_date - timedelta(days=7))
-    prev_start = pd.Timestamp(run_date - timedelta(days=14))
-    this_end = pd.Timestamp(run_date)
+    """solar / wind / gas / 순수입(net import) — this week vs last week (GWh)."""
+    this_lo = pd.Timestamp(run_date - timedelta(days=7))
+    prev_lo = pd.Timestamp(run_date - timedelta(days=14))
+    this_hi = pd.Timestamp(run_date)
 
-    def agg(s_lo, s_hi, label):
-        g = supply[(supply["date"] >= s_lo) & (supply["date"] < s_hi)]
-        ni = net_import[(net_import["date"] >= s_lo) & (net_import["date"] < s_hi)]
-        out = []
-        for region in TARGET_REGIONS:
-            gr = g[g["region"] == region]
-            renew = gr[gr["group"].isin(RENEWABLE)]["energy_mwh"].sum()
-            total = gr[gr["group"].isin(RENEWABLE + NON_RENEWABLE)]["energy_mwh"].sum()
-            out.append({
-                "region": region, "period": label,
-                "renewable_mwh": renew, "total_mwh": total,
-                "renewable_pct": (100 * renew / total) if total else float("nan"),
-                "net_import_mwh": ni[ni["region"] == region]["net_import_mwh"].sum(),
-            })
-        return pd.DataFrame(out)
+    w = wide.copy()
+    w["순수입"] = net_import
+    dates = w.index.get_level_values("date")
 
-    return pd.concat([agg(prev_start, this_start, "지난주"),
-                      agg(this_start, this_end, "이번주")], ignore_index=True)
+    def window(lo, hi):
+        m = (dates >= lo) & (dates < hi)
+        return w[m].groupby(level="region").sum() / 1000.0  # GWh
+
+    this, prev = window(this_lo, this_hi), window(prev_lo, this_lo)
+    items = [("solar", "solar"), ("wind", "wind"), ("gas", "gas"),
+             ("순수입(±)", "순수입")]
+    rows = []
+    for region in TARGET_REGIONS:
+        if region not in this.index:
+            continue
+        for label, col in items:
+            t = float(this.loc[region, col]) if col in this.columns else float("nan")
+            p = (float(prev.loc[region, col])
+                 if (region in prev.index and col in prev.columns) else float("nan"))
+            rows.append({"지역": region, "항목": label,
+                         "지난주": round(p, 1), "이번주": round(t, 1),
+                         "증감": round(t - p, 1)})
+    return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------------------- #
+# Plot — OE-style relative stacked bar (built lazily so plotly stays optional)
+# --------------------------------------------------------------------------- #
+def tracker_figure(daily: pd.DataFrame, region: str, run_date: date):
+    """Plotly relative-stacked daily bar for one region (GWh/day), OE-style."""
+    import plotly.graph_objects as go
+
+    d = daily[daily["region"] == region]
+    pivot = (d.pivot_table(index="date", columns="group", values="gwh",
+                           aggfunc="sum").sort_index())
+
+    fig = go.Figure()
+    for group in PLOT_ORDER:
+        if group not in pivot.columns:
+            continue
+        fig.add_bar(
+            x=pivot.index, y=pivot[group], name=LABELS.get(group, group),
+            marker_color=PALETTE.get(group, "#999999"),
+            hovertemplate=f"%{{x|%d %b}}<br>{LABELS.get(group, group)}: "
+                          f"%{{y:.1f}} GWh<extra></extra>",
+        )
+
+    # period average of delivered generation (positive groups only)
+    gen_cols = [g for g in GENERATION_GROUPS if g in pivot.columns]
+    av = pivot[gen_cols].sum(axis=1).mean() if gen_cols else 0.0
+
+    # divider between last week and this week
+    boundary = pd.Timestamp(run_date - timedelta(days=7)) - pd.Timedelta(hours=12)
+    fig.add_vline(x=boundary, line_width=2, line_dash="dash", line_color="#444")
+    fig.add_annotation(x=boundary, yref="paper", y=1.02, showarrow=False,
+                       text="◀ 지난주 | 이번주 ▶", font=dict(size=11, color="#444"))
+
+    fig.update_layout(
+        barmode="relative", bargap=0.1,  # thick bars
+        height=460, margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.28),
+        yaxis_title="GWh/day", xaxis_title=None,
+        title=dict(text=f"{region} — Av. {av:.0f} GWh/day", x=0.5, xanchor="center"),
+    )
+    fig.add_hline(y=0, line_width=1, line_color="#888")
+    return fig
