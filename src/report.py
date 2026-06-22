@@ -112,8 +112,7 @@ def _best_case_week(frames: dict[str, pd.DataFrame], start, end) -> pd.DataFrame
 
 def _describe_change(dc: float, dd: float, ds: float) -> str:
     """One-line numeric restatement of the change. NO causal interpretation."""
-    return (f"충전가 {dc:+.0f}, 방전가 {dd:+.0f}로 "
-            f"스프레드 {ds:+.0f} (AUD/MWh)")
+    return f"충전가 {dc:+.0f}, 방전가 {dd:+.0f}로 스프레드 {ds:+.0f}"
 
 
 def compare_best_case(

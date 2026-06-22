@@ -65,13 +65,18 @@ def _cached_weather(run_date: date) -> "pd.DataFrame":
     return weather.fetch_daily_temp(run_date, days=30)
 
 
+# Bump when the notices/articles item STRUCTURE changes — it is part of the cache
+# key, so increasing it invalidates any stale cached result after a redeploy.
+_VIEW_VER = 2
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
-def _cached_notices(run_date: date) -> dict:
+def _cached_notices(run_date: date, _ver: int = _VIEW_VER) -> dict:
     return notices.fetch_notices(run_date)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def _cached_articles(run_date: date) -> dict:
+def _cached_articles(run_date: date, _ver: int = _VIEW_VER) -> dict:
     return articles.fetch_articles(run_date)
 
 
@@ -271,7 +276,7 @@ with st.expander("해상도 검증 결과 (5분/288구간 확인)"):
 st.header("1. 주간 Spread 업데이트")
 
 _midhead("지난주 대비 증감")
-st.caption("설명은 숫자 변화만 풀어쓴 것이며, 원인 해석은 포함하지 않습니다.")
+st.caption("설명은 숫자 변화만 풀어쓴 것이며, 원인 해석은 포함하지 않습니다.  \n단위: AUD/MWh")
 change = rep.get("best_case_change")
 if change is None:
     st.info("지난주 데이터가 충분하지 않아 주간 비교를 건너뛰었습니다 (직전 7일 데이터가 불완전).")
@@ -367,7 +372,7 @@ st.header("4. AEMO 공지 · 관련 아티클")
 st.caption("AEMO Notice 및 관련 아티클의 원문 링크만 제공합니다.")
 
 try:
-    nres = _cached_notices(run_date)
+    nres = _cached_notices(run_date, _VIEW_VER)
     _midhead("AEMO Market Notices")
     st.caption(f"(주간 {nres['total_in_week']}건 중 가격검토 공지 제외, {nres['shown']}건) "
                "· 제목을 펼치면 원문이 표시됩니다. (AEMO 원본 파일은 브라우저에서 열리지 않고 "
@@ -388,7 +393,7 @@ except Exception as exc:
     st.warning(f"공지 섹션 일시 오류 (건너뜀): {exc}")
 
 try:
-    ares = _cached_articles(run_date)
+    ares = _cached_articles(run_date, _VIEW_VER)
     _midhead("관련 아티클")
     st.caption("WattClarity · RenewEconomy RSS")
     adf = articles.articles_dataframe(ares)
