@@ -26,6 +26,12 @@
 - **② 실제 값 매트릭스** — `[2H·4H × 충전/방전/Spread]` × 지역, Best Case와 고정시간 두 표를 나란히.
 - **③ 2025년 비교** — 분석 주가 속한 달의 2025년 스프레드 + 2025 연평균과 비교.
 - **④ 전력수요** — 24h / daytime(10–16) / peak(16–21) 밴드별 평균 MW.
+- **⑤ 발전원·기온·연계선** (외부 데이터) — 최근 30일 발전원별 일별 발전량(누적 영역, 재생에너지 중심),
+  재생 비중 이번주 vs 지난주, **순수입 추정**(연계선 전용 지표가 없어 *수요 − 역내발전*으로 추정), 도시별 일평균 기온.
+- **⑥ AEMO 공지·관련 아티클** (외부 데이터) — 해당 주 AEMO Market Notice와 WattClarity·RenewEconomy 아티클의
+  **링크 + 발췌만**. 자동 요약 없음(사람이 직접 검토·작성).
+
+> ⑤·⑥은 외부 API/스크래핑입니다. 실패해도 ①~④(스프레드·수요)에는 영향이 없습니다(섹션별 격리).
 
 **분석 구간**: 고른 월요일 기준 **직전 월요일 00:05 ~ 이번 월요일 00:00** = 정확히 7일(2016개 5분 구간).
 
@@ -79,7 +85,13 @@ pytest tests -v
 ### 배포 (Streamlit Community Cloud, 무료)
 1. 이 폴더(`nem-monitor/`)를 **GitHub 저장소**에 올립니다. (`.gitignore`가 `data/`, `.env`, 비밀키를 제외)
 2. <https://share.streamlit.io> 에 GitHub로 로그인 → **New app** → 저장소/브랜치 선택, **Main file path = `app.py`** 지정.
-3. 비밀키가 필요해지면(Phase 2의 Open Electricity API 등) 앱 **Settings → Secrets** 에 저장합니다. 코드에 넣지 않습니다.
+3. **비밀키(Open Electricity API)** 는 앱 **Settings → Secrets** 에 아래처럼 저장합니다. 코드/저장소에 넣지 않습니다.
+   ```toml
+   OPENELECTRICITY_API_KEY = "oe_..."
+   ```
+   - 키가 없거나 틀리면 ⑤ 발전·연계선 섹션만 안내 메시지로 건너뛰고, ①~④와 ⑥은 정상 동작합니다.
+   - 로컬 개발 시엔 `.env`(`OPENELECTRICITY_API_KEY=...`) 또는 `.streamlit/secrets.toml` 에 둡니다. (둘 다 `.gitignore` 처리됨)
+   - 기온(Open-Meteo)·AEMO 공지·아티클 RSS는 **키가 필요 없습니다.**
 4. 접근 제한이 필요하면 **Settings → Sharing** 에서 특정 이메일만 열람하도록 뷰어 인증을 켭니다.
 5. 배포 후 GitHub에 `push` 하면 앱이 자동 갱신됩니다.
 6. 배포 직후, 클라우드 서버에서 **AEMO 자동 다운로드가 정상 동작하는지** 한 번 실행해 확인하세요.
@@ -99,15 +111,23 @@ nem-monitor/
 │   ├── download.py        # AEMO 월별 CSV 자동 다운로드
 │   ├── spreads.py         # best-case / 고정시간 스프레드 (Excel 포팅)
 │   ├── demand.py          # 전력수요 24h/daytime/peak 분해
-│   └── report.py          # 파이프라인 조립 → 표 + Excel
+│   ├── report.py          # 파이프라인 조립 → 표 + Excel + ①②③
+│   ├── generation.py      # ⑤ Open Electricity 발전원별 + 순수입 추정 (격리)
+│   ├── weather.py         # ⑤ Open-Meteo 도시별 일평균 기온 (격리)
+│   ├── notices.py         # ⑥ AEMO Market Notice 주간 발췌 (격리)
+│   └── articles.py        # ⑥ WattClarity/RenewEconomy RSS 링크 (격리)
 └── tests/
     ├── fixtures/          # 회귀 테스트용 커밋된 원본 CSV
     ├── golden/verification.csv   # Excel 정답지
     ├── test_dates.py · test_spreads.py · test_regression.py
 ```
 
-### Phase 2 진행 상황
-- **완료(외부 의존 없음)**: ① 주간 비교, ② 매트릭스, ③ 2025 비교 — 모두 `src/report.py`의 결정론적 함수.
-- **예정(외부 의존, 격리됨)**: ④ 발전원·기온·연계선(`generation.py`, Open Electricity API), ⑤ 공지·아티클(`notices.py`, `articles.py`).
-  외부 의존 모듈은 코어에서 분리되어, 실패해도 ①~③·수요 계산은 멈추지 않습니다.
+### Phase 2 진행 상황 (모두 완료)
+- **외부 의존 없음**: ① 주간 비교, ② 매트릭스, ③ 2025 비교 — `src/report.py`의 결정론적 함수.
+- **외부 의존(격리됨)**: ⑤ 발전원·기온·연계선(`src/generation.py` = Open Electricity, `src/weather.py` = Open-Meteo),
+  ⑥ 공지·아티클(`src/notices.py` = AEMO NEMWeb, `src/articles.py` = WattClarity/RenewEconomy RSS).
+  - 각 외부 모듈은 자체 예외(`OEUnavailable`/`WeatherUnavailable`/`NoticesUnavailable`/`ArticlesUnavailable`)만 던지고
+    app에서 섹션별로 try/except — **실패해도 ①~④는 멈추지 않습니다.**
+  - 모든 외부 호출은 `@st.cache_data`로 캐시(생성/기온 1h, 공지/아티클 30m)해 호출량·타임아웃·메모리를 억제.
+  - 순수입(연계선)은 OE에 전용 지표가 없어 *수요 − 역내발전*으로 **추정**하며 화면에도 그렇게 라벨링.
   - API 키(`OPENELECTRICITY_API_KEY`)는 **코드/저장소에 넣지 않고** Streamlit **Settings → Secrets**(로컬은 `.env`)에 둡니다.

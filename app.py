@@ -22,7 +22,7 @@ import streamlit as st
 # `streamlit run`, or AppTest all differ in CWD / sys.path).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from src import ingest, report
+from src import (articles, generation, ingest, notices, report, weather)
 
 st.set_page_config(page_title="NEM Weekly Spread Monitor", layout="wide")
 st.title("NEM Weekly Spread Monitor")
@@ -41,6 +41,35 @@ def _cached_report(run_date: date, auto_download: bool) -> dict:
     cache-key friendly). Speeds up re-runs and keeps us inside Cloud limits.
     """
     return report.build_report(run_date, auto_download=auto_download)
+
+
+def _oe_key() -> str | None:
+    """Open Electricity API key from Streamlit Secrets (cloud) — else None,
+    and the module falls back to env / local .env for development."""
+    try:
+        return st.secrets.get("OPENELECTRICITY_API_KEY")  # type: ignore[no-any-return]
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_generation(run_date: date, api_key: str | None) -> dict:
+    return generation.fetch_generation(run_date, days=30, api_key=api_key)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_weather(run_date: date) -> "pd.DataFrame":
+    return weather.fetch_daily_temp(run_date, days=30)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_notices(run_date: date) -> dict:
+    return notices.fetch_notices(run_date)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _cached_articles(run_date: date) -> dict:
+    return articles.fetch_articles(run_date)
 
 
 with st.sidebar:
@@ -152,7 +181,95 @@ st.subheader("④ 전력수요 (밴드별 평균 MW: 24h / daytime 10–16 / pea
 st.dataframe(rep["demand"].round(0), width="stretch")
 
 st.download_button(
-    "📥 Excel 다운로드", data=report.to_excel_bytes(rep),
+    "📥 Excel 다운로드 (① ~ ④ 결정론 코어)", data=report.to_excel_bytes(rep),
     file_name=f"nem_spread_{rep['week_start']}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
+
+st.divider()
+st.caption("아래 ⑤·⑥은 외부 데이터(외부 API/스크래핑)입니다. 실패해도 위 ①~④ 계산에는 영향이 없습니다.")
+
+# --------------------------------------------------------------------------- #
+# (d) Generation mix / temperature / interconnector — ISOLATED
+# --------------------------------------------------------------------------- #
+st.subheader("⑤ 발전원 · 기온 · 연계선 (Open Electricity / Open-Meteo, 최근 30일)")
+try:
+    gen = _cached_generation(run_date, _oe_key())
+    supply = gen["generation"]
+    regions_avail = [r for r in ingest.REGIONS if r in set(supply["region"])]
+
+    st.markdown("**발전원별 일별 발전량 (MWh, 누적 영역) — 재생에너지 중심**")
+    sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
+    pivot = (supply[supply["region"] == sel]
+             .pivot_table(index="date", columns="group", values="energy_mwh",
+                          aggfunc="sum")
+             .sort_index())
+    # order columns renewable-first for readability
+    order = [g for g in (generation.RENEWABLE + generation.NON_RENEWABLE
+                         + generation.LOAD_GROUPS) if g in pivot.columns]
+    st.area_chart(pivot[order])
+
+    col_r, col_n = st.columns(2)
+    with col_r:
+        st.markdown("**재생에너지 비중 — 이번주 vs 지난주 (%)**")
+        wk = gen["weekly"]
+        share = wk.pivot(index="region", columns="period",
+                         values="renewable_pct").reindex(regions_avail).round(1)
+        st.dataframe(share, width="stretch")
+    with col_n:
+        st.markdown("**순수입 추정 (MWh, +수입/−수출) — 주간 합계**")
+        st.caption("연계선 전용 지표가 없어 *추정값*: 순수입 = 수요 − 역내 발전.")
+        ni = wk.pivot(index="region", columns="period",
+                      values="net_import_mwh").reindex(regions_avail).round(0)
+        st.dataframe(ni, width="stretch")
+
+    st.markdown("**일평균 기온 (°C) — 도시(수요 중심지) 기준**")
+    try:
+        temp = _cached_weather(run_date)
+        tpivot = temp.pivot_table(index="date", columns="region",
+                                  values="temp_mean_c").sort_index()
+        st.line_chart(tpivot)
+    except weather.WeatherUnavailable as exc:
+        st.info(f"기온 데이터 건너뜀: {exc}")
+except generation.OEUnavailable as exc:
+    st.info(f"발전·연계선 데이터 건너뜀 (다른 섹션에는 영향 없음): {exc}")
+except Exception as exc:  # never let this section break the page
+    st.warning(f"⑤ 섹션 일시 오류 (건너뜀): {exc}")
+
+# --------------------------------------------------------------------------- #
+# (e) AEMO notices + related articles — ISOLATED, no AI summary
+# --------------------------------------------------------------------------- #
+st.subheader("⑥ AEMO 공지 · 관련 아티클 (해당 주, 사람이 직접 검토·작성)")
+st.caption("자동 요약 없음 — 원문 링크와 발췌만 제공합니다.")
+
+link_col = st.column_config.LinkColumn("link", display_text="열기")
+try:
+    nres = _cached_notices(run_date)
+    st.markdown(f"**AEMO Market Notices** — 주간 {nres['total_in_week']}건 중 "
+                f"최근 {nres['shown']}건 표시")
+    ndf = notices.notices_dataframe(nres)
+    if ndf.empty:
+        st.write("표시할 공지가 없습니다.")
+    else:
+        st.dataframe(ndf, width="stretch", hide_index=True,
+                     column_config={"link": link_col})
+except notices.NoticesUnavailable as exc:
+    st.info(f"AEMO 공지 건너뜀: {exc}")
+except Exception as exc:
+    st.warning(f"공지 섹션 일시 오류 (건너뜀): {exc}")
+
+try:
+    ares = _cached_articles(run_date)
+    st.markdown("**관련 아티클** (WattClarity · RenewEconomy RSS)")
+    adf = articles.articles_dataframe(ares)
+    if adf.empty:
+        st.write("표시할 아티클이 없습니다.")
+    else:
+        st.dataframe(adf, width="stretch", hide_index=True,
+                     column_config={"link": link_col})
+    if ares.get("errors"):
+        st.caption(f"일부 피드 실패: {ares['errors']}")
+except articles.ArticlesUnavailable as exc:
+    st.info(f"아티클 건너뜀: {exc}")
+except Exception as exc:
+    st.warning(f"아티클 섹션 일시 오류 (건너뜀): {exc}")
