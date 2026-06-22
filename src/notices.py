@@ -85,6 +85,7 @@ def fetch_notices(run_date: date, *, max_items: int = 60,
             "date": d.isoformat(),
             "type": ntype,
             "title": title,
+            "text": _excerpt(txt, 1500),  # shown in-app (file link forces download)
             "link": HOST + path,
         })
     return {"items": items, "total_in_week": total,

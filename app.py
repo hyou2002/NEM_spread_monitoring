@@ -177,10 +177,8 @@ def _midhead(text: str) -> None:
                 unsafe_allow_html=True)
 
 
-def _paged_table(df: "pd.DataFrame", *, key: str, link_col: str | None = None,
-                 page_size: int = 5) -> None:
-    """Dynamic table paged with ◀ / ▶ buttons (no long scroll)."""
-    n = len(df)
+def _pager(n: int, key: str, page_size: int = 5) -> tuple[int, int]:
+    """Render ◀ / ▶ nav and return the (start, end) slice for the current page."""
     pages = max(1, (n + page_size - 1) // page_size)
     pg = st.session_state.get(key, 0)
     c1, c2, c3 = st.columns([1, 2, 1])
@@ -192,8 +190,15 @@ def _paged_table(df: "pd.DataFrame", *, key: str, link_col: str | None = None,
     st.session_state[key] = pg
     c2.markdown(f"<div style='text-align:center;padding-top:.4rem;color:#555;'>"
                 f"{pg + 1} / {pages}</div>", unsafe_allow_html=True)
-    sl = df.iloc[pg * page_size:(pg + 1) * page_size]
-    st.markdown(_html_table(sl, link_col=link_col), unsafe_allow_html=True)
+    return pg * page_size, (pg + 1) * page_size
+
+
+def _paged_table(df: "pd.DataFrame", *, key: str, link_col: str | None = None,
+                 page_size: int = 5) -> None:
+    """Dynamic table paged with ◀ / ▶ buttons (no long scroll)."""
+    lo, hi = _pager(len(df), key, page_size)
+    st.markdown(_html_table(df.iloc[lo:hi], link_col=link_col),
+                unsafe_allow_html=True)
 
 
 with st.sidebar:
@@ -335,7 +340,7 @@ try:
                "0선 위 = 발전원별 발전량 + 수입량, 0선 아래 = 배터리 및 양수 충전량 + 수출량")
     sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
     st.plotly_chart(generation.tracker_figure(gen["daily"], sel, run_date),
-                    use_container_width=True)
+                    width="stretch")
 
     st.markdown("**지난주 대비 증감 (GWh)**")
     st.caption("지난주·이번 주 solar · wind · gas · 순수입(±) 증감 비교.")
@@ -347,7 +352,7 @@ try:
     _midhead("일평균 기온(°C)")
     try:
         temp = _cached_weather(run_date)
-        st.plotly_chart(_temp_figure(temp, run_date), use_container_width=True)
+        st.plotly_chart(_temp_figure(temp, run_date), width="stretch")
     except weather.WeatherUnavailable as exc:
         st.info(f"기온 데이터 건너뜀: {exc}")
 except generation.OEUnavailable as exc:
@@ -364,12 +369,19 @@ st.caption("AEMO Notice 및 관련 아티클의 원문 링크만 제공합니다
 try:
     nres = _cached_notices(run_date)
     _midhead("AEMO Market Notices")
-    st.caption(f"(주간 {nres['total_in_week']}건 중 가격검토 공지 제외, {nres['shown']}건)")
-    ndf = notices.notices_dataframe(nres)
-    if ndf.empty:
+    st.caption(f"(주간 {nres['total_in_week']}건 중 가격검토 공지 제외, {nres['shown']}건) "
+               "· 제목을 펼치면 원문이 표시됩니다. (AEMO 원본 파일은 브라우저에서 열리지 않고 "
+               "다운로드되어, 본문을 앱 안에 표시합니다.)")
+    items = nres["items"]
+    if not items:
         st.write("표시할 공지가 없습니다.")
     else:
-        _paged_table(ndf, key="pg_notices", link_col="link")
+        lo, hi = _pager(len(items), "pg_notices")
+        for it in items[lo:hi]:
+            with st.expander(f"[{it['date']}] {it['title']}"):
+                st.caption(f"유형: {it['type']}")
+                st.text(it.get("text", ""))
+                st.markdown(f"[원문 파일(.txt 내려받기)]({it['link']})")
 except notices.NoticesUnavailable as exc:
     st.info(f"AEMO 공지 건너뜀: {exc}")
 except Exception as exc:
@@ -385,7 +397,7 @@ try:
     else:
         _paged_table(adf, key="pg_articles", link_col="link")
     if ares.get("errors"):
-        st.caption(f"일부 피드 실패: {ares['errors']}")
+        st.warning(f"일부 아티클 피드 실패(해당 소스만 제외됨): {ares['errors']}")
 except articles.ArticlesUnavailable as exc:
     st.info(f"아티클 건너뜀: {exc}")
 except Exception as exc:

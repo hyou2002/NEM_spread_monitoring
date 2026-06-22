@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
+from itertools import zip_longest
 from xml.etree import ElementTree
 
 import pandas as pd
@@ -23,7 +24,15 @@ FEEDS = {
     "WattClarity": "https://wattclarity.com.au/feed/",
     "RenewEconomy": "https://reneweconomy.com.au/feed/",
 }
-USER_AGENT = "Mozilla/5.0 NEM-Weekly-Spread-Monitor/1.0 (+internal tool)"
+# A realistic browser UA — some hosts (e.g. WattClarity's nginx) reject custom
+# bot UAs, especially from datacenter IPs like Streamlit Cloud.
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+FEED_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5",
+    "Accept-Language": "en-AU,en;q=0.9",
+}
 # Highlight (not filter) keywords — generation / demand / spread / battery / price.
 KEYWORDS = ["spread", "battery", "storage", "price", "demand", "generation",
             "renewable", "wind", "solar", "coal", "gas", "interconnector",
@@ -62,17 +71,18 @@ def fetch_articles(run_date: date, *, days: int = 9, max_per_source: int = 8,
                    session: requests.Session | None = None) -> dict:
     """Recent articles near the analysis week from the RSS feeds.
 
-    Returns {"items": [...], "errors": {source: msg}}. Each item has source,
-    title, link, date (ISO or ''), excerpt, and keywords (matched terms).
+    Returns {"items": [...], "errors": {source: msg}}. Sources are interleaved
+    (round-robin) so a feed that floods recent dates can't bury the other.
     Raises ArticlesUnavailable only if every feed failed.
     """
     sess = session or requests.Session()
     window_lo = run_date - timedelta(days=days)
-    items, errors = [], {}
+    per_source: dict[str, list[dict]] = {}
+    errors: dict[str, str] = {}
 
     for name, url in FEEDS.items():
         try:
-            resp = sess.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+            resp = sess.get(url, headers=FEED_HEADERS, timeout=30)
             resp.raise_for_status()
             parsed = _parse_feed(name, resp.text)
         except (requests.RequestException, ElementTree.ParseError) as exc:
@@ -80,16 +90,17 @@ def fetch_articles(run_date: date, *, days: int = 9, max_per_source: int = 8,
             continue
         recent = [p for p in parsed
                   if p["date"] is None or window_lo <= p["date"] <= run_date]
-        items.extend(recent[:max_per_source])
+        recent.sort(key=lambda p: (p["date"] or run_date), reverse=True)
+        per_source[name] = recent[:max_per_source]
 
-    if not items and errors:
+    if not per_source and errors:
         raise ArticlesUnavailable(f"모든 아티클 피드 실패: {errors}")
 
+    items: list[dict] = []
+    for group in zip_longest(*per_source.values()):
+        items.extend(p for p in group if p is not None)
     for p in items:
-        hay = f"{p['title']} {p['excerpt']}".lower()
-        p["keywords"] = ", ".join(k for k in KEYWORDS if k in hay)
         p["date"] = p["date"].isoformat() if p["date"] else ""
-    items.sort(key=lambda p: p["date"], reverse=True)
     return {"items": items, "errors": errors}
 
 
