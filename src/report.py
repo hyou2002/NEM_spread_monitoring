@@ -224,6 +224,64 @@ def reference_2025(
     return out
 
 
+def reference_2025_tables(
+    month_num: int, method: str, *, ref_path: Path = REFERENCE_2025
+) -> dict:
+    """2025 reference spreads in the dashboard image layout for one method.
+
+    Returns {"annual": df, "month": df, "month_label": "MM월"} where each df has
+    rows ['2H','4H'] (index name '구분') and columns NSW/QLD/VIC/SA.
+    """
+    ref = pd.read_csv(ref_path)
+    sub = ref[ref["method"] == method]
+
+    def _matrix(period: str) -> pd.DataFrame:
+        s = sub[sub["period"] == period]
+        data = {}
+        for region in ingest.REGIONS:
+            col = []
+            for battery in ("2H", "4H"):
+                cell = s[(s["region"] == region) & (s["battery"] == battery)]["spread"]
+                col.append(int(cell.iloc[0]) if not cell.empty else np.nan)
+            data[region] = col
+        df = pd.DataFrame(data, index=["2H", "4H"])
+        df.index.name = "구분"
+        return df
+
+    return {
+        "annual": _matrix("2025-avg"),
+        "month": _matrix(f"2025-{month_num:02d}"),
+        "month_label": f"{month_num:02d}월",
+    }
+
+
+def demand_compare(frames: dict[str, pd.DataFrame], run_date: date) -> pd.DataFrame:
+    """Average demand per region x band, this week and last week side by side.
+
+    Columns: 지역 / 시간대 / 지난주 / 이번주 (MW). 지난주 is NaN if the prior
+    week's data is incomplete (graceful — never raises).
+    """
+    start, end = dates.analysis_window(run_date)
+    pstart, pend = dates.analysis_window(dates.previous_monday(run_date))
+    this = (demand.compute_all_demand(frames, start, end)[["region", "band",
+            "avg_demand_mw"]].rename(columns={"avg_demand_mw": "이번주"}))
+    try:
+        prev = (demand.compute_all_demand(frames, pstart, pend)[["region", "band",
+                "avg_demand_mw"]].rename(columns={"avg_demand_mw": "지난주"}))
+        out = prev.merge(this, on=["region", "band"], how="right")
+    except AssertionError:
+        out = this.copy()
+        out["지난주"] = float("nan")
+
+    out["region"] = pd.Categorical(out["region"], categories=ingest.REGIONS,
+                                   ordered=True)
+    out["band"] = pd.Categorical(out["band"], categories=["24h", "daytime", "peak"],
+                                 ordered=True)
+    out = out.sort_values(["region", "band"]).reset_index(drop=True)
+    out = out.rename(columns={"region": "지역", "band": "시간대"})
+    return out[["지역", "시간대", "지난주", "이번주"]]
+
+
 # --------------------------------------------------------------------------- #
 # Pipeline
 # --------------------------------------------------------------------------- #
@@ -263,6 +321,7 @@ def build_report(
         "resolution": resolution_report(frames),
         "spreads": spreads_tbl,
         "demand": demand_tbl,
+        "demand_compare": demand_compare(frames, run_date),
         "best_case_change": compare_best_case(frames, run_date),  # (a); may be None
         "best_case_matrix": metric_matrix(spreads_tbl, "best_case"),  # (b)
         "fixed_time_matrix": metric_matrix(spreads_tbl, "fixed_time"),  # (b)

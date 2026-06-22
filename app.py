@@ -134,72 +134,78 @@ if not res["is_5min"].all():
 with st.expander("해상도 검증 결과 (5분/288구간 확인)"):
     st.dataframe(res, width="stretch")
 
-# --------------------------------------------------------------------------- #
-# (a) Week-over-week Best Case change
-# --------------------------------------------------------------------------- #
-st.subheader("① 이번주 vs 지난주 — Best Case (AUD/MWh)")
-st.caption("값 = 이번주, 화살표·숫자 = 지난주 대비 증감. 설명은 숫자 변화를 그대로 풀어쓴 것이며, "
-           "원인 해석은 포함하지 않습니다 (사람이 직접 작성).")
+# =========================================================================== #
+# 주간 Spread 업데이트 — 지난주 대비 증감 + 실제 값 매트릭스
+# =========================================================================== #
+st.header("주간 Spread 업데이트")
+
+st.subheader("지난주 대비 증감")
+st.caption("설명은 숫자 변화를 그대로 풀어쓴 것이며, 원인 해석은 포함하지 않습니다 (사람이 직접 작성).")
 change = rep.get("best_case_change")
 if change is None:
-    st.info("지난주 데이터가 충분하지 않아 주간 비교를 건너뛰었습니다 "
-            "(직전 7일 데이터가 불완전).")
+    st.info("지난주 데이터가 충분하지 않아 주간 비교를 건너뛰었습니다 (직전 7일 데이터가 불완전).")
 else:
-    st.dataframe(report.format_change_table(change), width="stretch",
-                 hide_index=True)
+    st.dataframe(
+        report.format_change_table(change)[["지역", "용량", "설명 (지난주 대비)"]],
+        width="stretch", hide_index=True,
+    )
 
-# --------------------------------------------------------------------------- #
-# (b) Metric matrices — Best Case / Fixed Time side by side
-# --------------------------------------------------------------------------- #
-st.subheader("② 실제 값 — 매트릭스 (AUD/MWh)")
+st.caption("실제 값 매트릭스 — [2H/4H × 충전/방전/Spread] × 지역 (AUD/MWh)")
 col_bc, col_fx = st.columns(2)
 with col_bc:
-    st.markdown("**Best Case (시간대 자유)**")
+    st.markdown("**Best Case**")
     st.dataframe(rep["best_case_matrix"], width="stretch")
 with col_fx:
-    st.markdown("**고정시간 (Fixed Time)**")
+    st.markdown("**고정시간**")
     st.dataframe(rep["fixed_time_matrix"], width="stretch")
 
-# --------------------------------------------------------------------------- #
-# (c) 2025 reference comparison
-# --------------------------------------------------------------------------- #
-st.subheader(f"③ 2025년 비교 — 분석월({rep['month_num']:02d}월) 및 연평균 대비 (Spread, AUD/MWh)")
-ref = rep["reference_2025"]
-col_bc2, col_fx2 = st.columns(2)
-with col_bc2:
+# =========================================================================== #
+# 2025년 Spread — 연평균 + 분석월 (대시보드 이미지 양식)
+# =========================================================================== #
+st.header("2025년 Spread")
+st.caption("Spread, AUD/MWh — 2025년 연평균과 분석월 기준 참조값.")
+bc25 = report.reference_2025_tables(rep["month_num"], "best_case")
+fx25 = report.reference_2025_tables(rep["month_num"], "fixed_time")
+col_a, col_b = st.columns(2)
+with col_a:
     st.markdown("**Best Case**")
-    st.dataframe(ref[ref["방식"] == "best_case"].drop(columns="방식"),
-                 width="stretch", hide_index=True)
-with col_fx2:
-    st.markdown("**고정시간 (Fixed Time)**")
-    st.dataframe(ref[ref["방식"] == "fixed_time"].drop(columns="방식"),
-                 width="stretch", hide_index=True)
+    st.markdown("연 평균")
+    st.dataframe(bc25["annual"], width="stretch")
+    st.markdown(f"{bc25['month_label']} 평균")
+    st.dataframe(bc25["month"], width="stretch")
+with col_b:
+    st.markdown("**고정시간**")
+    st.markdown("연 평균")
+    st.dataframe(fx25["annual"], width="stretch")
+    st.markdown(f"{fx25['month_label']} 평균")
+    st.dataframe(fx25["month"], width="stretch")
 
-# --------------------------------------------------------------------------- #
-# Demand + download
-# --------------------------------------------------------------------------- #
-st.subheader("④ 전력수요 (밴드별 평균 MW: 24h / daytime 10–16 / peak 16–21)")
-st.dataframe(rep["demand"].round(0), width="stretch")
+# =========================================================================== #
+# 전력 수요
+# =========================================================================== #
+st.header("전력 수요")
+st.caption("밴드별 평균 MW — 시간대: 24h(전체) / daytime(10–16) / peak(16–21). 지난주·이번주 비교.")
+st.dataframe(rep["demand_compare"].round(0), width="stretch", hide_index=True)
 
 st.download_button(
-    "📥 Excel 다운로드 (① ~ ④ 결정론 코어)", data=report.to_excel_bytes(rep),
+    "📥 Excel 다운로드 (결정론 코어 표)", data=report.to_excel_bytes(rep),
     file_name=f"nem_spread_{rep['week_start']}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
 st.divider()
-st.caption("아래 ⑤·⑥은 외부 데이터(외부 API/스크래핑)입니다. 실패해도 위 ①~④ 계산에는 영향이 없습니다.")
+st.caption("아래는 외부 데이터(외부 API/스크래핑)입니다. 실패해도 위 계산에는 영향이 없습니다.")
 
-# --------------------------------------------------------------------------- #
-# (d) Generation mix / temperature / interconnector — ISOLATED
-# --------------------------------------------------------------------------- #
-st.subheader("⑤ 발전원 · 기온 · 연계선 (Open Electricity / Open-Meteo, 최근 30일)")
+# =========================================================================== #
+# OpenNEM 발전량 및 기온 — ISOLATED
+# =========================================================================== #
+st.header("OpenNEM 발전량 및 기온")
 try:
     gen = _cached_generation(run_date, _oe_key())
     supply = gen["generation"]
     regions_avail = [r for r in ingest.REGIONS if r in set(supply["region"])]
 
-    st.markdown("**발전원별 일별 발전량 (MWh, 누적 영역) — 재생에너지 중심**")
+    st.markdown("**발전원별 일별 발전량 (MWh, 일별 누적 막대) — 재생에너지 중심**")
     sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
     pivot = (supply[supply["region"] == sel]
              .pivot_table(index="date", columns="group", values="energy_mwh",
@@ -208,23 +214,9 @@ try:
     # order columns renewable-first for readability
     order = [g for g in (generation.RENEWABLE + generation.NON_RENEWABLE
                          + generation.LOAD_GROUPS) if g in pivot.columns]
-    st.area_chart(pivot[order])
+    st.bar_chart(pivot[order], stack=True)
 
-    col_r, col_n = st.columns(2)
-    with col_r:
-        st.markdown("**재생에너지 비중 — 이번주 vs 지난주 (%)**")
-        wk = gen["weekly"]
-        share = wk.pivot(index="region", columns="period",
-                         values="renewable_pct").reindex(regions_avail).round(1)
-        st.dataframe(share, width="stretch")
-    with col_n:
-        st.markdown("**순수입 추정 (MWh, +수입/−수출) — 주간 합계**")
-        st.caption("연계선 전용 지표가 없어 *추정값*: 순수입 = 수요 − 역내 발전.")
-        ni = wk.pivot(index="region", columns="period",
-                      values="net_import_mwh").reindex(regions_avail).round(0)
-        st.dataframe(ni, width="stretch")
-
-    st.markdown("**일평균 기온 (°C) — 도시(수요 중심지) 기준**")
+    st.markdown("**일평균 기온 (°C)**")
     try:
         temp = _cached_weather(run_date)
         tpivot = temp.pivot_table(index="date", columns="region",
@@ -233,15 +225,15 @@ try:
     except weather.WeatherUnavailable as exc:
         st.info(f"기온 데이터 건너뜀: {exc}")
 except generation.OEUnavailable as exc:
-    st.info(f"발전·연계선 데이터 건너뜀 (다른 섹션에는 영향 없음): {exc}")
+    st.info(f"발전 데이터 건너뜀 (다른 섹션에는 영향 없음): {exc}")
 except Exception as exc:  # never let this section break the page
-    st.warning(f"⑤ 섹션 일시 오류 (건너뜀): {exc}")
+    st.warning(f"발전 섹션 일시 오류 (건너뜀): {exc}")
 
-# --------------------------------------------------------------------------- #
-# (e) AEMO notices + related articles — ISOLATED, no AI summary
-# --------------------------------------------------------------------------- #
-st.subheader("⑥ AEMO 공지 · 관련 아티클 (해당 주, 사람이 직접 검토·작성)")
-st.caption("자동 요약 없음 — 원문 링크와 발췌만 제공합니다.")
+# =========================================================================== #
+# AEMO 공지 · 관련 아티클 — ISOLATED, no AI summary
+# =========================================================================== #
+st.header("AEMO 공지 · 관련 아티클")
+st.caption("해당 주, 사람이 직접 검토·작성. 자동 요약 없음 — 원문 링크와 발췌만 제공합니다.")
 
 link_col = st.column_config.LinkColumn("link", display_text="열기")
 try:
