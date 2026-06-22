@@ -27,27 +27,42 @@ import requests
 DEFAULT_BASE_URL = "https://api.openelectricity.org.au/v4"
 TARGET_REGIONS = ["NSW", "QLD", "VIC", "SA"]  # TAS excluded (spec)
 
-# Delivered generation (plotted positive). Order = stack order, bottom -> top.
-GENERATION_GROUPS = ["coal", "gas", "distillate", "bioenergy", "hydro", "wind",
-                     "solar", "battery_discharging"]
+# Map OE detailed fueltech codes -> our display groups (gas/coal/bioenergy merged,
+# solar split into utility/rooftop). The net "battery" code is dropped to avoid
+# double-counting its charging/discharging components.
+FUELTECH_MAP = {
+    "coal_black": "coal", "coal_brown": "coal",
+    "gas_ccgt": "gas", "gas_ocgt": "gas", "gas_recip": "gas",
+    "gas_steam": "gas", "gas_wcmg": "gas",
+    "distillate": "distillate",
+    "bioenergy_biomass": "bioenergy", "bioenergy_biogas": "bioenergy",
+    "hydro": "hydro", "wind": "wind",
+    "solar_utility": "solar_utility", "solar_rooftop": "solar_rooftop",
+    "battery_discharging": "battery_discharging",
+    "battery_charging": "battery_charging", "pumps": "pumps",
+}
+# Delivered generation (plotted positive), stack order nearest-zero -> outward.
+GENERATION_GROUPS = ["coal", "hydro", "bioenergy", "distillate", "gas",
+                     "battery_discharging", "wind", "solar_utility", "solar_rooftop"]
 # Loads (plotted negative; API gives positive magnitudes so we negate).
 LOAD_GROUPS = ["battery_charging", "pumps"]
-DROP_GROUPS = ["battery"]  # net battery = discharging - charging; avoid double count
 
 # OpenNEM/Open Electricity-style fueltech palette.
 PALETTE = {
     "coal": "#251000", "gas": "#F48E1B", "distillate": "#E2674E",
     "bioenergy": "#1C7A3D", "hydro": "#4582B4", "wind": "#417505",
-    "solar": "#F5C913", "battery_discharging": "#00A2FA", "imports": "#7E57C2",
+    "solar_utility": "#FDB813", "solar_rooftop": "#FFE26F",
+    "battery_discharging": "#00A2FA", "imports": "#7E57C2",
     "battery_charging": "#9BD3F0", "pumps": "#88B0D8", "exports": "#CDB4E6",
 }
 LABELS = {
     "coal": "Coal", "gas": "Gas", "distillate": "Distillate",
-    "bioenergy": "Bioenergy", "hydro": "Hydro", "wind": "Wind", "solar": "Solar",
+    "bioenergy": "Bioenergy", "hydro": "Hydro", "wind": "Wind",
+    "solar_utility": "Solar (Utility)", "solar_rooftop": "Solar (Rooftop)",
     "battery_discharging": "Battery (Discharging)", "imports": "Imports",
     "battery_charging": "Battery (Charging)", "pumps": "Pumps", "exports": "Exports",
 }
-# Legend / stack order: positives bottom->top, then negatives.
+# Stack order: positives nearest-zero -> outward (Imports on top), then loads.
 PLOT_ORDER = GENERATION_GROUPS + ["imports", "battery_charging", "pumps", "exports"]
 
 
@@ -146,12 +161,14 @@ def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = No
     end = run_date
     start = run_date - timedelta(days=days)
     energy = _fetch_network(["energy"], start, end, api_key=key, base_url=base_url,
-                            secondary_grouping="fueltech_group")
+                            secondary_grouping="fueltech")
     demand = _fetch_network(["demand_energy"], start, end, api_key=key,
                             base_url=base_url, secondary_grouping=None, path="market")
 
     gen = _series_to_long(energy[0], "mwh")
-    gen = gen[gen["region"].isin(TARGET_REGIONS) & ~gen["group"].isin(DROP_GROUPS)]
+    gen = gen[gen["region"].isin(TARGET_REGIONS)]
+    gen["group"] = gen["group"].map(FUELTECH_MAP)
+    gen = gen.dropna(subset=["group"])  # drops net "battery" and any unmapped code
     wide = (gen.pivot_table(index=["date", "region"], columns="group",
                             values="mwh", aggfunc="sum").fillna(0.0))
     for col in GENERATION_GROUPS + LOAD_GROUPS:
@@ -191,6 +208,7 @@ def _weekly_summary(wide: pd.DataFrame, net_import: pd.Series,
     this_hi = pd.Timestamp(run_date)
 
     w = wide.copy()
+    w["solar"] = w.get("solar_utility", 0.0) + w.get("solar_rooftop", 0.0)
     w["순수입"] = net_import
     dates = w.index.get_level_values("date")
 

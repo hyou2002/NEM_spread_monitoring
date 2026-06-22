@@ -171,7 +171,8 @@ else:
         width="stretch", hide_index=True,
     )
 
-st.caption("실제 값 매트릭스 — [2H/4H × 충전/방전/Spread] × 지역 (AUD/MWh)")
+st.subheader("이번주 Spread")
+st.caption("[2H/4H × 충전/방전/Spread] × 지역 (AUD/MWh)")
 col_bc, col_fx = st.columns(2)
 with col_bc:
     st.markdown("**Best Case**")
@@ -205,7 +206,7 @@ with col_b:
 # 전력 수요
 # =========================================================================== #
 st.header("전력 수요")
-st.caption("밴드별 평균 MW — 시간대: 24h(전체) / daytime(10–16) / peak(16–21). 지난주·이번주 비교.")
+st.caption("지난주·이번주 시간대별 평균 수요(MW/5분) 비교. 24h(전체) / daytime(10–16) / peak(16–21)")
 st.dataframe(rep["demand_compare"].round(0), width="stretch", hide_index=True)
 
 st.download_button(
@@ -225,14 +226,15 @@ try:
     gen = _cached_generation(run_date, _oe_key())
     regions_avail = gen["regions"]
 
-    st.markdown("**발전원별 일별 발전량 (GWh/day)** — Open Electricity 트래커 재현. "
-                "0선 위 = 발전(연료원별) + 수입, 0선 아래 = 부하(배터리 충전·펌핑·수출). "
+    st.markdown("**발전원별 일별 발전량 (GWh/day)** — Open Electricity 웹사이트와 유사한 형태. "
+                "0선 위 = 발전원별 발전량 + 수입량, 0선 아래 = 배터리 및 양수 충전량 + 수출량. "
                 "점선 = 지난주/이번주 경계.")
     sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
     st.plotly_chart(generation.tracker_figure(gen["daily"], sel, run_date),
                     use_container_width=True)
 
-    st.markdown("**이번주 vs 지난주 요약 (GWh) — solar · wind · gas · 순수입(±)**")
+    st.markdown("**이번주 vs 지난주 요약 (GWh)**")
+    st.caption("지난주·이번주 solar · wind · gas · 순수입(±) 증감 비교.")
     st.dataframe(gen["weekly"], width="stretch", hide_index=True)
 
     st.markdown("**일평균 기온(°C)**")
