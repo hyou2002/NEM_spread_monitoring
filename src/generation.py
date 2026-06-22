@@ -141,15 +141,12 @@ def _series_to_long(data_entry: dict, value_name: str) -> pd.DataFrame:
 # --------------------------------------------------------------------------- #
 # Public: 30-day tracker data
 # --------------------------------------------------------------------------- #
-def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = None,
-                     base_url: str = DEFAULT_BASE_URL) -> dict:
-    """Daily signed generation (GWh) for the OE-style tracker, last ``days``.
+def fetch_raw(run_date: date, *, days: int = 30, api_key: str | None = None,
+              base_url: str = DEFAULT_BASE_URL) -> dict:
+    """The network part only — cache THIS (stable shape, survives code changes).
 
-    Returns:
-        daily   : tidy [date, region, group, gwh] — generation/imports positive,
-                  loads/exports negative; ready for a relative stacked bar.
-        weekly  : [지역, 항목, 지난주, 이번주, 증감] (GWh) for solar/wind/gas/순수입.
-        regions : list of regions present.
+    Returns {"gen": long df [date,region,group(detailed),mwh],
+             "dem": long df [date,region,demand_energy(GWh)]}.
     Raises OEUnavailable on any failure.
     """
     key = load_api_key(api_key)
@@ -157,15 +154,27 @@ def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = No
         raise OEUnavailable(
             "OPENELECTRICITY_API_KEY 가 설정되지 않았습니다. "
             "로컬은 .env, 배포는 Streamlit Secrets 에 키를 넣으세요.")
-
     end = run_date
     start = run_date - timedelta(days=days)
     energy = _fetch_network(["energy"], start, end, api_key=key, base_url=base_url,
                             secondary_grouping="fueltech")
     demand = _fetch_network(["demand_energy"], start, end, api_key=key,
                             base_url=base_url, secondary_grouping=None, path="market")
+    return {"gen": _series_to_long(energy[0], "mwh"),
+            "dem": _series_to_long(demand[0], "mwh")}
 
-    gen = _series_to_long(energy[0], "mwh")
+
+def build_tracker(raw: dict, run_date: date) -> dict:
+    """Transform raw frames into the tracker tables. Kept OUT of the cache so a
+    code change here always takes effect (no stale cached structure).
+
+    Returns:
+        daily   : tidy [date, region, group, gwh] — generation/imports positive,
+                  loads/exports negative; ready for a relative stacked bar.
+        weekly  : [지역, 항목, 지난주, 이번 주, 증감] (GWh) for solar/wind/gas/순수입.
+        regions : list of regions present.
+    """
+    gen = raw["gen"].copy()
     gen = gen[gen["region"].isin(TARGET_REGIONS)]
     gen["group"] = gen["group"].map(FUELTECH_MAP)
     gen = gen.dropna(subset=["group"])  # drops net "battery" and any unmapped code
@@ -176,7 +185,7 @@ def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = No
             wide[col] = 0.0
 
     # demand_energy is GWh on the market endpoint -> MWh
-    dem = _series_to_long(demand[0], "mwh")
+    dem = raw["dem"].copy()
     dem = dem[dem["region"].isin(TARGET_REGIONS)]
     dem = dem.set_index(["date", "region"])["mwh"] * 1000.0
 
@@ -198,6 +207,13 @@ def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = No
     regions = [r for r in TARGET_REGIONS if r in set(daily["region"])]
     weekly = _weekly_summary(wide, net_import, run_date)
     return {"daily": daily, "weekly": weekly, "regions": regions}
+
+
+def fetch_generation(run_date: date, *, days: int = 30, api_key: str | None = None,
+                     base_url: str = DEFAULT_BASE_URL) -> dict:
+    """Convenience: fetch_raw + build_tracker (used by CLI/tests; app caches raw)."""
+    raw = fetch_raw(run_date, days=days, api_key=api_key, base_url=base_url)
+    return build_tracker(raw, run_date)
 
 
 def _weekly_summary(wide: pd.DataFrame, net_import: pd.Series,

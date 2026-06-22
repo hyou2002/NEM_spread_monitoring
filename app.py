@@ -53,8 +53,10 @@ def _oe_key() -> str | None:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _cached_generation(run_date: date, api_key: str | None) -> dict:
-    return generation.fetch_generation(run_date, days=30, api_key=api_key)
+def _cached_gen_raw(run_date: date, api_key: str | None) -> dict:
+    """Cache ONLY the raw network fetch (stable shape). The tracker structure is
+    rebuilt fresh each run so code changes always take effect (no stale cache)."""
+    return generation.fetch_raw(run_date, days=30, api_key=api_key)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -263,7 +265,7 @@ st.caption("아래는 외부 데이터(외부 API/스크래핑)입니다. 실패
 # =========================================================================== #
 st.header("OpenNEM 발전량 및 기온")
 try:
-    gen = _cached_generation(run_date, _oe_key())
+    gen = generation.build_tracker(_cached_gen_raw(run_date, _oe_key()), run_date)
     regions_avail = gen["regions"]
 
     st.markdown("**발전원별 일별 발전량 (GWh/day)**")
