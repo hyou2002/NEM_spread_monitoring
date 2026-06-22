@@ -203,7 +203,7 @@ def reference_2025(
     """This week's spread next to the same month in 2025 and the 2025 average."""
     ref = pd.read_csv(ref_path)
     period = f"2025-{month_num:02d}"
-    this_col = "이번주"
+    this_col = "이번 주"
     m_col = f"2025-{month_num:02d}"
     avg_col = "2025 연평균"
 
@@ -264,7 +264,7 @@ def demand_compare(frames: dict[str, pd.DataFrame], run_date: date) -> pd.DataFr
     start, end = dates.analysis_window(run_date)
     pstart, pend = dates.analysis_window(dates.previous_monday(run_date))
     this = (demand.compute_all_demand(frames, start, end)[["region", "band",
-            "avg_demand_mw"]].rename(columns={"avg_demand_mw": "이번주"}))
+            "avg_demand_mw"]].rename(columns={"avg_demand_mw": "이번 주"}))
     try:
         prev = (demand.compute_all_demand(frames, pstart, pend)[["region", "band",
                 "avg_demand_mw"]].rename(columns={"avg_demand_mw": "지난주"}))
@@ -279,7 +279,7 @@ def demand_compare(frames: dict[str, pd.DataFrame], run_date: date) -> pd.DataFr
                                  ordered=True)
     out = out.sort_values(["region", "band"]).reset_index(drop=True)
     out = out.rename(columns={"region": "지역", "band": "시간대"})
-    return out[["지역", "시간대", "지난주", "이번주"]]
+    return out[["지역", "시간대", "지난주", "이번 주"]]
 
 
 # --------------------------------------------------------------------------- #

@@ -228,7 +228,7 @@ def _weekly_summary(wide: pd.DataFrame, net_import: pd.Series,
             p = (float(prev.loc[region, col])
                  if (region in prev.index and col in prev.columns) else float("nan"))
             rows.append({"지역": region, "항목": label,
-                         "지난주": round(p, 1), "이번주": round(t, 1),
+                         "지난주": round(p, 1), "이번 주": round(t, 1),
                          "증감": round(t - p, 1)})
     return pd.DataFrame(rows)
 
@@ -263,7 +263,7 @@ def tracker_figure(daily: pd.DataFrame, region: str, run_date: date):
     boundary = pd.Timestamp(run_date - timedelta(days=7)) - pd.Timedelta(hours=12)
     fig.add_vline(x=boundary, line_width=2, line_dash="dash", line_color="#444")
     fig.add_annotation(x=boundary, yref="paper", y=1.02, showarrow=False,
-                       text="◀ 지난주 | 이번주 ▶", font=dict(size=11, color="#444"))
+                       text="◀ 지난주 | 이번 주 ▶", font=dict(size=11, color="#444"))
 
     fig.update_layout(
         barmode="relative", bargap=0.1,  # thick bars

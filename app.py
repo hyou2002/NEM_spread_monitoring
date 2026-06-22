@@ -26,7 +26,7 @@ from src import (articles, generation, ingest, notices, report, weather)
 
 st.set_page_config(page_title="NEM Weekly Spread Monitor", layout="wide")
 st.title("NEM Weekly Spread Monitor")
-st.caption("호주 NEM 주간 배터리 차익거래 스프레드 — NSW / QLD / VIC / SA")
+st.caption("호주 NEM 주간 배터리 차익거래 스프레드: NSW / QLD / VIC / SA")
 
 
 def _most_recent_monday(today: date) -> date:
@@ -86,11 +86,50 @@ def _temp_figure(temp: "pd.DataFrame", run_date: date):
     boundary = pd.Timestamp(run_date - timedelta(days=7)) - pd.Timedelta(hours=12)
     fig.add_vline(x=boundary, line_width=2, line_dash="dash", line_color="#444")
     fig.add_annotation(x=boundary, yref="paper", y=1.04, showarrow=False,
-                       text="◀ 지난주 | 이번주 ▶", font=dict(size=11, color="#444"))
+                       text="◀ 지난주 | 이번 주 ▶", font=dict(size=11, color="#444"))
     fig.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10),
                       yaxis_title="°C",
                       legend=dict(orientation="h", yanchor="bottom", y=-0.3))
     return fig
+
+
+def _merged_table(df: "pd.DataFrame", group_col: str = "지역") -> str:
+    """Static HTML table with the group_col cells merged (rowspan). Rows must be
+    already grouped/ordered by group_col."""
+    cols = list(df.columns)
+    others = [c for c in cols if c != group_col]
+    rows = df.to_dict("records")
+    out = [
+        "<style>"
+        "table.nemtbl{border-collapse:collapse;width:100%;font-size:0.9rem;}"
+        "table.nemtbl th,table.nemtbl td{border:1px solid #d6d9de;padding:6px 10px;"
+        "text-align:center;}"
+        "table.nemtbl th{background:#f2f4f7;font-weight:600;}"
+        "table.nemtbl td.grp{font-weight:600;background:#fafbfc;vertical-align:middle;}"
+        "table.nemtbl td.txt{text-align:left;}"
+        "</style>",
+        '<table class="nemtbl"><thead><tr>',
+        *[f"<th>{c}</th>" for c in cols],
+        "</tr></thead><tbody>",
+    ]
+    j, n = 0, len(rows)
+    while j < n:
+        g = rows[j][group_col]
+        k = j
+        while k < n and rows[k][group_col] == g:
+            k += 1
+        for ri in range(j, k):
+            out.append("<tr>")
+            if ri == j:
+                out.append(f'<td class="grp" rowspan="{k - j}">{g}</td>')
+            for c in others:
+                val = rows[ri][c]
+                cls = ' class="txt"' if isinstance(val, str) and len(val) > 12 else ""
+                out.append(f"<td{cls}>{val}</td>")
+            out.append("</tr>")
+        j = k
+    out.append("</tbody></table>")
+    return "".join(out)
 
 
 with st.sidebar:
@@ -166,12 +205,10 @@ change = rep.get("best_case_change")
 if change is None:
     st.info("지난주 데이터가 충분하지 않아 주간 비교를 건너뛰었습니다 (직전 7일 데이터가 불완전).")
 else:
-    st.dataframe(
-        report.format_change_table(change)[["지역", "용량", "설명 (지난주 대비)"]],
-        width="stretch", hide_index=True,
-    )
+    chg = report.format_change_table(change)[["지역", "용량", "설명 (지난주 대비)"]]
+    st.markdown(_merged_table(chg), unsafe_allow_html=True)
 
-st.subheader("이번주 Spread")
+st.subheader("이번 주 Spread")
 st.caption("[2H/4H × 충전/방전/Spread] × 지역 (AUD/MWh)")
 col_bc, col_fx = st.columns(2)
 with col_bc:
@@ -206,8 +243,11 @@ with col_b:
 # 전력 수요
 # =========================================================================== #
 st.header("전력 수요")
-st.caption("지난주·이번주 시간대별 평균 수요(MW/5분) 비교. 24h(전체) / daytime(10–16) / peak(16–21)")
-st.dataframe(rep["demand_compare"].round(0), width="stretch", hide_index=True)
+st.caption("지난주·이번 주 시간대별 평균 수요(MW/5분) 비교. 24h(전체) / daytime(10–16) / peak(16–21)")
+_dem = rep["demand_compare"].copy()
+for _c in ("지난주", "이번 주"):
+    _dem[_c] = _dem[_c].map(lambda v: "-" if pd.isna(v) else f"{v:,.0f}")
+st.markdown(_merged_table(_dem), unsafe_allow_html=True)
 
 st.download_button(
     "📥 Excel 다운로드 (결정론 코어 표)", data=report.to_excel_bytes(rep),
@@ -226,16 +266,19 @@ try:
     gen = _cached_generation(run_date, _oe_key())
     regions_avail = gen["regions"]
 
-    st.markdown("**발전원별 일별 발전량 (GWh/day)** — Open Electricity 웹사이트와 유사한 형태. "
-                "0선 위 = 발전원별 발전량 + 수입량, 0선 아래 = 배터리 및 양수 충전량 + 수출량. "
-                "점선 = 지난주/이번주 경계.")
+    st.markdown("**발전원별 일별 발전량 (GWh/day)**")
+    st.caption("Open Electricity 웹사이트와 유사한 형태. 0선 위 = 발전원별 발전량 + 수입량, "
+               "0선 아래 = 배터리 및 양수 충전량 + 수출량. 점선 = 지난주/이번 주 경계.")
     sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
     st.plotly_chart(generation.tracker_figure(gen["daily"], sel, run_date),
                     use_container_width=True)
 
-    st.markdown("**이번주 vs 지난주 요약 (GWh)**")
-    st.caption("지난주·이번주 solar · wind · gas · 순수입(±) 증감 비교.")
-    st.dataframe(gen["weekly"], width="stretch", hide_index=True)
+    st.markdown("**지난주 대비 증감 (GWh)**")
+    st.caption("지난주·이번 주 solar · wind · gas · 순수입(±) 증감 비교.")
+    _wk = gen["weekly"].copy()
+    for _c in ("지난주", "이번 주", "증감"):
+        _wk[_c] = _wk[_c].map(lambda v: "-" if pd.isna(v) else f"{v:,.1f}")
+    st.markdown(_merged_table(_wk), unsafe_allow_html=True)
 
     st.markdown("**일평균 기온(°C)**")
     try:
