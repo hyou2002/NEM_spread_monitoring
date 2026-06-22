@@ -44,7 +44,7 @@ def _excerpt(text: str, max_chars: int = 300) -> str:
     return (body[:max_chars] + "…") if len(body) > max_chars else body
 
 
-def fetch_notices(run_date: date, *, max_items: int = 40,
+def fetch_notices(run_date: date, *, max_items: int = 60,
                   session: requests.Session | None = None) -> dict:
     """AEMO market notices issued in the analysis week (prev Monday .. run_date).
 
@@ -77,20 +77,31 @@ def fetch_notices(run_date: date, *, max_items: int = 40,
             txt = nr.text
         except requests.RequestException:
             continue  # skip a single bad file, keep going
+        title = _field(txt, "External Reference")
+        ntype = _field(txt, "Notice Type Description")
+        if _is_price_review(title, ntype):
+            continue  # routine "Prices ... subject to review" noise — excluded
         items.append({
             "date": d.isoformat(),
-            "id": _field(txt, "Notice ID"),
-            "type": _field(txt, "Notice Type Description"),
-            "title": _field(txt, "External Reference"),
-            "excerpt": _excerpt(txt),
+            "type": ntype,
+            "title": title,
             "link": HOST + path,
         })
-    return {"items": items, "total_in_week": total, "shown": len(items)}
+    return {"items": items, "total_in_week": total,
+            "scanned": min(total, max_items), "shown": len(items)}
+
+
+def _is_price_review(title: str, ntype: str) -> bool:
+    """Routine 'Prices for interval ... are subject to review' notices (noise)."""
+    t = (title or "").lower()
+    return (t.startswith("prices for interval")
+            or "subject to review" in t
+            or "subject to review" in (ntype or "").lower())
 
 
 def notices_dataframe(result: dict) -> pd.DataFrame:
-    """Tidy table view of fetch_notices()['items']."""
-    cols = ["date", "type", "title", "excerpt", "link"]
+    """Tidy table view of fetch_notices()['items'] (no excerpt)."""
+    cols = ["date", "type", "title", "link"]
     if not result["items"]:
         return pd.DataFrame(columns=cols)
     return pd.DataFrame(result["items"])[cols]

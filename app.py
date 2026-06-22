@@ -164,6 +164,38 @@ def _static_indexed(df: "pd.DataFrame", index_name: str) -> None:
                 unsafe_allow_html=True)
 
 
+_MIDHEAD_CSS = (
+    "<style>.midhead{background:#e6f0fb;border-left:4px solid #5b9bd5;"
+    "padding:.3rem .7rem;border-radius:4px;font-weight:600;font-size:1.15rem;"
+    "margin:.8rem 0 .4rem;}</style>"
+)
+
+
+def _midhead(text: str) -> None:
+    """중제목 — light-blue background band."""
+    st.markdown(f"{_MIDHEAD_CSS}<div class='midhead'>{_html.escape(text)}</div>",
+                unsafe_allow_html=True)
+
+
+def _paged_table(df: "pd.DataFrame", *, key: str, link_col: str | None = None,
+                 page_size: int = 5) -> None:
+    """Dynamic table paged with ◀ / ▶ buttons (no long scroll)."""
+    n = len(df)
+    pages = max(1, (n + page_size - 1) // page_size)
+    pg = st.session_state.get(key, 0)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    if c1.button("◀ 이전", key=f"{key}_prev", disabled=(pg <= 0)):
+        pg -= 1
+    if c3.button("다음 ▶", key=f"{key}_next", disabled=(pg >= pages - 1)):
+        pg += 1
+    pg = max(0, min(pg, pages - 1))
+    st.session_state[key] = pg
+    c2.markdown(f"<div style='text-align:center;padding-top:.4rem;color:#555;'>"
+                f"{pg + 1} / {pages}</div>", unsafe_allow_html=True)
+    sl = df.iloc[pg * page_size:(pg + 1) * page_size]
+    st.markdown(_html_table(sl, link_col=link_col), unsafe_allow_html=True)
+
+
 with st.sidebar:
     st.header("실행 설정")
     default_monday = _most_recent_monday(date.today())
@@ -178,14 +210,16 @@ with st.sidebar:
         "PRICE_AND_DEMAND_*.csv 업로드 (여러 개 가능)",
         type="csv", accept_multiple_files=True,
     )
-    run = st.button("실행 (Run)", type="primary", width="stretch")
+    run = st.button("실행", type="primary", width="stretch")
 
 if run_date.weekday() != 0:
     st.warning("실행 기준일은 월요일이어야 합니다. 가장 가까운 월요일을 선택하세요.")
     st.stop()
 
-if not run:
-    st.info("왼쪽에서 월요일을 고르고 **실행 (Run)** 을 누르세요. "
+if run:
+    st.session_state["has_run"] = True
+if not st.session_state.get("has_run"):
+    st.info("왼쪽에서 월요일을 고르고 **실행** 을 누르세요. "
             "처음 실행 시 데이터 다운로드로 수십 초 걸릴 수 있습니다.")
     st.stop()
 
@@ -215,7 +249,7 @@ with st.spinner("AEMO 데이터를 받아 계산 중…"):
         st.stop()
 
 start, end = rep["window"]
-st.success(f"완료 — 분석 주: **{rep['week_start']}**  "
+st.success(f"완료! 분석주: **{rep['week_start']}** "
            f"(구간 {start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M}), "
            f"지역: {', '.join(rep['regions'])}")
 
@@ -231,8 +265,8 @@ with st.expander("해상도 검증 결과 (5분/288구간 확인)"):
 # =========================================================================== #
 st.header("1. 주간 Spread 업데이트")
 
-st.markdown("##### 지난주 대비 증감")
-st.caption("설명은 숫자 변화를 그대로 풀어쓴 것이며, 원인 해석은 포함하지 않습니다 (사람이 직접 작성).")
+_midhead("지난주 대비 증감")
+st.caption("설명은 숫자 변화만 풀어쓴 것이며, 원인 해석은 포함하지 않습니다.")
 change = rep.get("best_case_change")
 if change is None:
     st.info("지난주 데이터가 충분하지 않아 주간 비교를 건너뛰었습니다 (직전 7일 데이터가 불완전).")
@@ -240,7 +274,7 @@ else:
     chg = report.format_change_table(change)[["지역", "용량", "설명 (지난주 대비)"]]
     st.markdown(_html_table(chg, merge_col="지역"), unsafe_allow_html=True)
 
-st.markdown("##### 이번 주 Spread")
+_midhead("이번 주 Spread")
 st.caption("[2H/4H × 충전/방전/Spread] × 지역 (AUD/MWh)")
 col_bc, col_fx = st.columns(2)
 with col_bc:
@@ -250,7 +284,7 @@ with col_fx:
     st.markdown("**고정시간**")
     _static_indexed(rep["fixed_time_matrix"], "구분")
 
-st.markdown("##### 2025년 Spread")
+_midhead("2025년 Spread")
 st.caption("Spread, AUD/MWh — 2025년 연평균과 분석월 기준 참조값.")
 bc25 = report.reference_2025_tables(rep["month_num"], "best_case")
 fx25 = report.reference_2025_tables(rep["month_num"], "fixed_time")
@@ -285,7 +319,8 @@ st.download_button(
 )
 
 st.divider()
-st.caption("아래는 외부 데이터(외부 API/스크래핑)입니다. 실패해도 위 계산에는 영향이 없습니다.")
+st.caption("아래는 외부 데이터(외부 API/스크래핑)입니다. OpenNEM의 경우 최근 1년 데이터까지만 "
+           "열람 가능하며, 로딩에 실패하더라도 위 계산에는 영향이 없습니다.")
 
 # =========================================================================== #
 # OpenNEM 발전량 및 기온 — ISOLATED
@@ -295,7 +330,7 @@ try:
     gen = generation.build_tracker(_cached_gen_raw(run_date, _oe_key()), run_date)
     regions_avail = gen["regions"]
 
-    st.markdown("##### 발전원별 일별 발전량 (GWh/day)")
+    _midhead("발전원별 일별 발전량 (GWh/day)")
     st.caption("Open Electricity 웹사이트와 최대한 유사하게 구현해보았습니다.  \n"
                "0선 위 = 발전원별 발전량 + 수입량, 0선 아래 = 배터리 및 양수 충전량 + 수출량")
     sel = st.selectbox("지역 선택", regions_avail, key="gen_region")
@@ -309,7 +344,7 @@ try:
         _wk[_c] = _wk[_c].map(lambda v: "-" if pd.isna(v) else f"{v:,.1f}")
     st.markdown(_html_table(_wk, merge_col="지역"), unsafe_allow_html=True)
 
-    st.markdown("##### 일평균 기온(°C)")
+    _midhead("일평균 기온(°C)")
     try:
         temp = _cached_weather(run_date)
         st.plotly_chart(_temp_figure(temp, run_date), use_container_width=True)
@@ -324,17 +359,17 @@ except Exception as exc:  # never let this section break the page
 # AEMO 공지 · 관련 아티클 — ISOLATED, no AI summary
 # =========================================================================== #
 st.header("4. AEMO 공지 · 관련 아티클")
-st.caption("해당 주, 사람이 직접 검토·작성. 자동 요약 없음 — 원문 링크와 발췌만 제공합니다.")
+st.caption("AEMO Notice 및 관련 아티클의 원문 링크만 제공합니다.")
 
 try:
     nres = _cached_notices(run_date)
-    st.markdown("##### AEMO Market Notices")
-    st.caption(f"(주간 {nres['total_in_week']}건 중 최근 {nres['shown']}건 표시)")
+    _midhead("AEMO Market Notices")
+    st.caption(f"(주간 {nres['total_in_week']}건 중 가격검토 공지 제외, {nres['shown']}건)")
     ndf = notices.notices_dataframe(nres)
     if ndf.empty:
         st.write("표시할 공지가 없습니다.")
     else:
-        st.markdown(_html_table(ndf, link_col="link"), unsafe_allow_html=True)
+        _paged_table(ndf, key="pg_notices", link_col="link")
 except notices.NoticesUnavailable as exc:
     st.info(f"AEMO 공지 건너뜀: {exc}")
 except Exception as exc:
@@ -342,13 +377,13 @@ except Exception as exc:
 
 try:
     ares = _cached_articles(run_date)
-    st.markdown("##### 관련 아티클")
+    _midhead("관련 아티클")
     st.caption("WattClarity · RenewEconomy RSS")
     adf = articles.articles_dataframe(ares)
     if adf.empty:
         st.write("표시할 아티클이 없습니다.")
     else:
-        st.markdown(_html_table(adf, link_col="link"), unsafe_allow_html=True)
+        _paged_table(adf, key="pg_articles", link_col="link")
     if ares.get("errors"):
         st.caption(f"일부 피드 실패: {ares['errors']}")
 except articles.ArticlesUnavailable as exc:

@@ -94,7 +94,7 @@ def fetch_articles(run_date: date, *, days: int = 9, max_per_source: int = 8,
 
 
 def articles_dataframe(result: dict) -> pd.DataFrame:
-    cols = ["date", "source", "title", "keywords", "excerpt", "link"]
+    cols = ["date", "source", "title", "link"]
     if not result["items"]:
         return pd.DataFrame(columns=cols)
     return pd.DataFrame(result["items"])[cols]
