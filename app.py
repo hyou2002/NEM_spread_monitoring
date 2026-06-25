@@ -318,7 +318,7 @@ with col_b:
 st.header("2. 전력 수요")
 st.caption("지난주·이번 주 시간대별 평균 수요(MW/5분) 비교. 24h(전체) / daytime(10–16) / peak(16–21)")
 _dem = rep["demand_compare"].copy()
-for _c in ("지난주", "이번 주", "증감"):
+for _c in [c for c in ("지난주", "이번 주", "증감") if c in _dem.columns]:
     _dem[_c] = _dem[_c].map(lambda v: "-" if pd.isna(v) else f"{v:,.0f}")
 st.markdown(_html_table(_dem, merge_col="지역"), unsafe_allow_html=True)
 
