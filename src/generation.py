@@ -234,7 +234,7 @@ def _weekly_summary(wide: pd.DataFrame, net_import: pd.Series,
 
     this, prev = window(this_lo, this_hi), window(prev_lo, this_lo)
     items = [("solar", "solar"), ("wind", "wind"), ("gas", "gas"),
-             ("순수입(±)", "순수입")]
+             ("coal", "coal"), ("순수입(±)", "순수입")]
     rows = []
     for region in TARGET_REGIONS:
         if region not in this.index:

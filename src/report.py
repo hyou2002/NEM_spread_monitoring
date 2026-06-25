@@ -277,8 +277,9 @@ def demand_compare(frames: dict[str, pd.DataFrame], run_date: date) -> pd.DataFr
     out["band"] = pd.Categorical(out["band"], categories=["24h", "daytime", "peak"],
                                  ordered=True)
     out = out.sort_values(["region", "band"]).reset_index(drop=True)
+    out["증감"] = out["이번 주"] - out["지난주"]
     out = out.rename(columns={"region": "지역", "band": "시간대"})
-    return out[["지역", "시간대", "지난주", "이번 주"]]
+    return out[["지역", "시간대", "지난주", "이번 주", "증감"]]
 
 
 # --------------------------------------------------------------------------- #
